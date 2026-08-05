@@ -71,22 +71,3 @@ imagine-yourself/
 ## 文档
 
 - 📐 [v3 重设计规格](docs/v3_redesign_spec.md) — v3 完整设计文档
-- 🚀 [环境准备指南](docs/setup.md) — Python/Node/Git 安装步骤
-- 📐 [架构文档](docs/architecture.md) — 目录结构、模块职责、API 端点全列表
-- 🗄️ [数据库表结构](docs/storge.md) — 实体字段定义与约束
-- 🔧 [工具配置](docs/tools.md) — agent/conf/tools/ 下工具描述配置说明
-- 🔄 [数据库简化设计](docs/db_simplification_design.md) — v3 数据库重构设计
-
-## 测试
-
-```bash
-# 运行全部 pytest 测试
-python -m pytest src/backend/tests/ -q
-
-# 端到端验证脚本（导入 sample 剧本 → 推进 tick → 验证全链路）
-python src/backend/tests/e2e_verify.py
-```
-
-## License
-
-Apache-2.0

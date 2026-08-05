@@ -20,7 +20,6 @@ export default function BottomBar() {
   const stopAutoTick = useGameStore((s) => s.stopAutoTick);
   const runTickOnce = useGameStore((s) => s.runTickOnce);
   const runTimeJump = useGameStore((s) => s.runTimeJump);
-  const refreshEvents = useGameStore((s) => s.refreshEvents);
   const setNotification = useGameStore((s) => s.setNotification);
   const setError = useGameStore((s) => s.setError);
 
@@ -50,7 +49,7 @@ export default function BottomBar() {
     const text = actionText.trim();
     if (!text) return;
     try {
-      // 玩家行动 → 创建一条 player_action 事件，随后触发一个 tick 推进剧情
+      // 玩家行动作为一条 player_action 事件写入客观层
       await worldApi.createEvent({
         tick_num: meta?.tick_num ?? 0,
         game_time: meta?.game_time ?? '',
@@ -59,9 +58,9 @@ export default function BottomBar() {
         importance: 3,
       });
       setActionText('');
-      setNotification('玩家行动已记录，正在推进…');
+      setNotification('玩家行动已记录，正在推进 LLM 管线…');
+      // 推进一个 tick，触发 agent 管线（NPC 决策 / 世界反应 / 事件润色）
       await runTickOnce(60);
-      await refreshEvents();
     } catch (e) {
       setError(`提交行动失败：${(e as Error).message}`);
     }
@@ -70,6 +69,8 @@ export default function BottomBar() {
   return (
     <div className="bottom-bar">
       <div className="time-control-bar">
+        <span className="bar-label">时间控制</span>
+
         <div className="mode-toggle">
           <button
             className={`mode-btn ${timeMode === 'auto' ? 'active' : ''}`}
@@ -77,7 +78,7 @@ export default function BottomBar() {
             disabled={isProcessing}
             title="自动按间隔推进 tick"
           >
-            ▶ Auto
+            ▶ 自动
           </button>
           <button
             className={`mode-btn ${timeMode === 'paused' ? 'active' : ''}`}
@@ -90,16 +91,14 @@ export default function BottomBar() {
         </div>
 
         <button
-          className="mode-btn"
+          className="mode-btn tick-btn"
           onClick={handleTick}
           disabled={isProcessing}
           title="手动推进一个 tick（60 秒）"
-          style={{ background: isProcessing ? '#1a1a1a' : '#2a3a5a', color: '#d0d0d0' }}
         >
           {isProcessing ? <span className="spinner" /> : '⏭ 下一 Tick'}
         </button>
 
-        {/* Auto 速度档位 */}
         {timeMode === 'auto' && (
           <div className="speed-btn-group">
             {SPEED_KEYS.map((k) => (
@@ -115,9 +114,9 @@ export default function BottomBar() {
           </div>
         )}
 
-        <span className="muted small" style={{ marginLeft: 'auto', alignSelf: 'center' }}>
-          时间跨越
-        </span>
+        <span className="bar-divider" />
+
+        <span className="bar-label">时间跨越</span>
         <div className="jump-btn-group">
           {JUMP_KEYS.map((k) => (
             <button

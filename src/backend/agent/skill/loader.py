@@ -209,3 +209,33 @@ def set_skill_active_version(name: str, version: str) -> Dict[str, Any]:
 
     _clear_cache(name)
     return {"name": name, "active_version": version}
+
+
+def delete_skill_version(name: str, version: str) -> Dict[str, Any]:
+    """删除某个版本目录。
+    规则：
+    - 至少保留一个版本（删除最后一个会抛 ValueError）
+    - 如果被删的版本是 default_version，先把 default_version 切换到另一个版本
+    """
+    fs = get_skill(name)
+    if not fs:
+        raise FileNotFoundError(f"skill {name} 不存在")
+    if version not in fs.versions:
+        raise FileNotFoundError(f"版本 {version} 不存在")
+    if len(fs.versions) <= 1:
+        raise ValueError("至少保留一个版本，禁止删除")
+
+    # 切 active 到另一个版本（如果需要）
+    if fs.default_version == version:
+        # 取剩余版本中第一个（按字典序）
+        remaining = [v for v in fs.versions.keys() if v != version]
+        new_active = sorted(remaining)[0]
+        config_path = fs.skill_dir / "config.json"
+        config = fs.config.copy()
+        config["default_version"] = new_active
+        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 删除目录
+    shutil.rmtree(str(fs.versions[version].version_dir), ignore_errors=True)
+    _clear_cache(name)
+    return {"name": name, "deleted_version": version}

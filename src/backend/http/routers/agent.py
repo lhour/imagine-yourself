@@ -1,5 +1,6 @@
 """src.backend.http.routers.agent — LLM 管线调用入口。"""
 
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,16 +12,68 @@ from src.backend.agent.skill.loader import (
     list_skills, get_skill, render_skill,
     list_skill_versions, get_skill_version_detail,
     create_skill_version, update_skill_version, set_skill_active_version,
+    delete_skill_version,
 )
 from src.backend.agent.prompt.loader import (
     list_prompts, get_prompt, render_prompt,
     list_prompt_versions, get_prompt_version_detail,
     create_prompt_version, update_prompt_version, set_prompt_active_version,
+    delete_prompt_version,
 )
 from src.backend.agent.tool.base import ToolManager
 from src.backend.agent.tool import entity_tools
+from src.backend.deepseek_client import chat_completion, is_mock_mode
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
+
+
+# ============================================================
+# 测试连接
+# ============================================================
+
+class TestConnectionReq(BaseModel):
+    system_prompt: Optional[str] = None
+    user_prompt: Optional[str] = None
+    model: Optional[str] = None
+
+
+@router.post("/_test_connection")
+def test_connection(req: TestConnectionReq, sm=Depends(require_active_save)):
+    """调一次 LLM 看是否通（最多 512 tokens，省 token）。
+    返回 {ok, message, model, latency_ms, mock}
+    """
+    t0 = time.time()
+    mock = is_mock_mode()
+    try:
+        sys_p = req.system_prompt or "You are a helpful assistant. Reply with exactly \"PONG\" in Chinese."
+        usr_p = req.user_prompt or "Ping me."
+        r = chat_completion(
+            sys_p, usr_p,
+            model=req.model,
+            temperature=0.0,
+            max_tokens=512,
+        )
+        latency = int((time.time() - t0) * 1000)
+        content = (r.get("content") or "").strip()
+        usage = r.get("usage") or {}
+        return {
+            "ok": True,
+            "mock": r.get("mock", mock),
+            "model": r.get("model") or req.model or "default",
+            "latency_ms": latency,
+            "message": f"连接成功，LLM 回复前 60 字：{content[:60]}" if content else "（LLM 空回复）",
+            "reply_excerpt": content[:200],
+            "usage": usage,
+            "rounds": r.get("rounds"),
+        }
+    except Exception as e:
+        latency = int((time.time() - t0) * 1000)
+        return {
+            "ok": False,
+            "mock": mock,
+            "latency_ms": latency,
+            "message": f"连接失败：{e}",
+        }
 
 
 class TickReq(BaseModel):
@@ -347,3 +400,29 @@ def set_prompt_active_endpoint(
         return set_prompt_active_version(name, req.version)
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
+
+
+# ---------- 删除版本 ----------
+
+@router.delete("/skills/{name}/versions/{version}")
+def delete_skill_version_endpoint(
+    name: str, version: str, sm=Depends(require_active_save)
+):
+    try:
+        return delete_skill_version(name, version)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/prompts/{name}/versions/{version}")
+def delete_prompt_version_endpoint(
+    name: str, version: str, sm=Depends(require_active_save)
+):
+    try:
+        return delete_prompt_version(name, version)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))

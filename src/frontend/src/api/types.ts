@@ -117,6 +117,32 @@ export interface Item {
   custom_attrs: Record<string, unknown>;
 }
 
+export interface EventParticipant {
+  id: number;
+  event_id: number;
+  participant_type: 'character' | 'group' | 'item' | 'map';
+  participant_id: number;
+  role_raw: string;
+  perception_raw: string | null;
+  name: string;
+}
+
+export interface MemorySight {
+  char_id: number;
+  char_name: string;
+  depth: number;
+  correctness: number;
+  forget_prob: number;
+  is_false: boolean;
+}
+
+export interface LinkedMemory extends MemorySight {
+  id: number;
+  memory_raw: string;
+  memory_polished: string | null;
+  remember_tick: number;
+}
+
 export interface EventRecord {
   id: number;
   tick_num: number;
@@ -129,15 +155,44 @@ export interface EventRecord {
   importance: number;
   custom_attrs: Record<string, unknown>;
   created_at: string;
+  participants: EventParticipant[];
+  remembered_by: MemorySight[];
+  forgotten_by: MemorySight[];
+  linked_memories?: LinkedMemory[];
 }
 
-export interface EventParticipant {
+export interface CharacterQuest {
   id: number;
-  event_id: number;
-  participant_type: string;
-  participant_id: number;
-  role_raw: string;
-  perception: string | null;
+  char_id: number;
+  title: string;
+  desc_raw: string;
+  desc_polished: string | null;
+  quest_type: string;
+  status: 'open' | 'in_progress' | 'done' | 'failed' | 'blocked';
+  priority: number;
+  start_tick: number;
+  estimated_ticks: number | null;
+  success_condition_raw: string | null;
+  fail_condition_raw: string | null;
+  assigned_by: string | null;
+  parent_quest_id: number | null;
+  completion_summary_raw: string | null;
+  blocked_reason_raw: string | null;
+  custom_attrs: Record<string, unknown>;
+}
+
+export interface CharacterAgenda {
+  id: number;
+  char_id: number;
+  title: string;
+  principle_raw: string;
+  principle_polished: string | null;
+  status: 'active' | 'blocked' | 'completed' | 'archived';
+  priority: number;
+  start_tick: number;
+  end_tick: number | null;
+  conflict_with: string | null;
+  blocked_reason_raw: string | null;
 }
 
 export interface Memory {

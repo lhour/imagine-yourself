@@ -1,17 +1,89 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useGameStore } from '../store/gameStore';
-import { savesApi } from '../api/client';
+import { savesApi, configApi } from '../api/client';
+
+interface SnapshotItem {
+  name: string;
+}
+
+function snapshotName(s: unknown): string {
+  if (typeof s === 'string') return s;
+  return ((s as SnapshotItem | null)?.name) ?? String(s ?? '');
+}
+
+const POLISH_LEN_OPTS = [
+  { v: 'short', label: '短（1句）' },
+  { v: 'medium', label: '中（3~5句）' },
+  { v: 'long', label: '长（段落）' },
+  { v: 'epic', label: '史诗（多段）' },
+] as const;
 
 export default function LeftPanel() {
   const meta = useGameStore((s) => s.meta);
   const activeSave = useGameStore((s) => s.activeSave);
   const refreshMeta = useGameStore((s) => s.refreshMeta);
-  const refreshSaves = useGameStore((s) => s.refreshSaves);
+  const refreshAll = useGameStore((s) => s.refreshAll);
   const protagonist = useGameStore((s) => s.protagonist);
+  const setNotification = useGameStore((s) => s.setNotification);
+  const setError = useGameStore((s) => s.setError);
 
   const [editingMeta, setEditingMeta] = useState(false);
   const [metaDraft, setMetaDraft] = useState({ tick_num: 0, game_time: '', era_name: '' });
-  const [snapshotName, setSnapshotName] = useState('');
+  const [snapshots, setSnapshots] = useState<string[]>([]);
+  const [cfg, setCfg] = useState<{
+    polish_length?: string;
+    gore_enabled?: boolean;
+    adult_content?: boolean;
+    violence_level?: number;
+  }>({});
+
+  const loadSnapshots = async () => {
+    try {
+      const data = await savesApi.listSnapshots();
+      const items: unknown[] = data?.snapshots ?? [];
+      setSnapshots(items.map(snapshotName));
+    } catch {
+      setSnapshots([]);
+    }
+  };
+
+  const loadCfg = async () => {
+    try {
+      const c = await configApi.get();
+      setCfg({
+        polish_length: c.ui?.default_polish_length ?? c.simulation?.polish_length ?? 'medium',
+        gore_enabled: c.simulation?.gore_enabled ?? false,
+        adult_content: c.simulation?.adult_content ?? false,
+        violence_level: c.simulation?.violence_level ?? 2,
+      });
+    } catch { /* ignore */ }
+  };
+
+  useEffect(() => {
+    if (activeSave) {
+      loadSnapshots();
+    } else {
+      setSnapshots([]);
+    }
+  }, [activeSave]);
+  useEffect(() => { void loadCfg(); }, []);
+
+  const patchCfg = async (patch: Record<string, unknown>) => {
+    try {
+      const simulation = {
+        gore_enabled: cfg.gore_enabled,
+        adult_content: cfg.adult_content,
+        violence_level: cfg.violence_level,
+        polish_length: cfg.polish_length,
+        ...patch,
+      };
+      await configApi.patch({ simulation });
+      setCfg((prev) => ({ ...prev, ...patch }));
+      setNotification('设置已更新');
+    } catch (e) {
+      setError(`保存设置失败：${(e as Error).message}`);
+    }
+  };
 
   const startEditMeta = () => {
     if (meta) {
@@ -33,34 +105,51 @@ export default function LeftPanel() {
       });
       await refreshMeta();
       setEditingMeta(false);
+      setNotification('元信息已保存');
     } catch (e) {
-      alert(`保存失败：${(e as Error).message}`);
+      setError(`保存失败：${(e as Error).message}`);
     }
   };
 
   const createSnapshot = async () => {
     try {
-      const r = await fetch('/api/saves/snapshot', { method: 'POST' });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.detail || '快照失败');
-      alert(`快照已创建：${data.created ?? ''}`);
+      const r = await savesApi.createSnapshot();
+      setNotification(`快照已创建：${(r as { created?: string }).created ?? ''}`);
+      await loadSnapshots();
     } catch (e) {
-      alert(`快照失败：${(e as Error).message}`);
+      setError(`快照失败：${(e as Error).message}`);
     }
   };
 
-  const saveGame = async () => {
-    // 元信息已经在后端持久化，这里只是触发一次快照
-    await createSnapshot();
+  const restoreSnapshot = async (name: string) => {
+    if (!confirm(`确认回滚到快照「${name}」？当前进度将被覆盖。`)) return;
+    try {
+      await savesApi.restoreSnapshot(name);
+      setNotification('快照已回滚');
+      await refreshAll();
+      await loadSnapshots();
+    } catch (e) {
+      setError(`回滚失败：${(e as Error).message}`);
+    }
+  };
+
+  const deleteSnapshot = async (name: string) => {
+    if (!confirm(`确认删除快照「${name}」？`)) return;
+    try {
+      await savesApi.deleteSnapshot(name);
+      setNotification('快照已删除');
+      await loadSnapshots();
+    } catch (e) {
+      setError(`删除失败：${(e as Error).message}`);
+    }
   };
 
   return (
     <div className="left-panel">
       <div className="panel-section">
-        <h4>当前存档</h4>
-        <div className="field-row">
-          <label>存档名</label>
-          <span className="value">{activeSave ?? '—'}</span>
+        <div className="panel-title">
+          <span>当前存档</span>
+          <span className="panel-badge">{activeSave ?? '未激活'}</span>
         </div>
         <div className="field-row">
           <label>Tick</label>
@@ -78,59 +167,95 @@ export default function LeftPanel() {
           <label>主角</label>
           <span className="value">{protagonist?.name ?? '—'}</span>
         </div>
-        <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
-          <button className="small" onClick={startEditMeta}>编辑</button>
-          <button className="small" onClick={saveGame}>保存</button>
-          <button className="small" onClick={() => { refreshSaves(); refreshMeta(); }}>刷新</button>
+        <div className="panel-actions">
+          <button className="small" onClick={startEditMeta} disabled={!meta}>
+            编辑
+          </button>
+          <button className="small" onClick={createSnapshot} disabled={!activeSave}>
+            快照
+          </button>
+          <button className="small" onClick={refreshMeta}>
+            刷新
+          </button>
         </div>
       </div>
 
       <div className="panel-section">
-        <h4>全局配置</h4>
-        <div className="toggle-row">
-          <label>
-            <input type="checkbox" defaultChecked={false} /> 血腥
-          </label>
+        <div className="panel-title">
+          <span>内容偏好</span>
         </div>
-        <div className="toggle-row">
-          <label>
-            <input type="checkbox" defaultChecked={false} /> 成人内容
-          </label>
-        </div>
-        <div className="field-row">
+        <div className="field-row field-col">
           <label>润色长度</label>
-          <select className="small" defaultValue="medium">
-            <option value="short">短</option>
-            <option value="medium">中</option>
-            <option value="long">长</option>
-            <option value="epic">史诗</option>
+          <select
+            value={cfg.polish_length ?? 'medium'}
+            onChange={(e) => void patchCfg({ polish_length: e.target.value })}
+          >
+            {POLISH_LEN_OPTS.map((o) => (
+              <option key={o.v} value={o.v}>{o.label}</option>
+            ))}
           </select>
         </div>
         <div className="field-row">
-          <label>风格</label>
-          <select className="small" defaultValue="narrative">
-            <option value="narrative">叙事</option>
-            <option value="ancient">古风</option>
-            <option value="scifi">科幻</option>
-            <option value="realistic">写实</option>
-          </select>
+          <label>血腥描写</label>
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={!!cfg.gore_enabled}
+              onChange={(e) => void patchCfg({ gore_enabled: e.target.checked })}
+            />
+            <span className="slider" />
+          </label>
         </div>
-      </div>
-
-      <div className="panel-section">
-        <h4>快照</h4>
-        <div className="form-row">
+        <div className="field-row">
+          <label>成人内容</label>
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={!!cfg.adult_content}
+              onChange={(e) => void patchCfg({ adult_content: e.target.checked })}
+            />
+            <span className="slider" />
+          </label>
+        </div>
+        <div className="field-row field-col">
+          <label>暴力等级 {cfg.violence_level ?? 2}/5</label>
           <input
-            className="small"
-            placeholder="（自动命名）"
-            value={snapshotName}
-            onChange={(e) => setSnapshotName(e.target.value)}
-            disabled
+            type="range"
+            min={0} max={5} step={1}
+            value={cfg.violence_level ?? 2}
+            onChange={(e) => void patchCfg({ violence_level: Number(e.target.value) })}
           />
         </div>
-        <button className="small" style={{ width: '100%' }} onClick={createSnapshot}>
-          创建快照
-        </button>
+      </div>
+
+      <div className="panel-section">
+        <div className="panel-title">
+          <span>快照</span>
+          <span className="panel-badge">{snapshots.length}</span>
+        </div>
+        {snapshots.length === 0 ? (
+          <div className="panel-empty">暂无快照。点击上方「快照」保存当前进度。</div>
+        ) : (
+          <ul className="snapshot-mini-list">
+            {snapshots.map((s) => (
+              <li key={s}>
+                <span className="snap-mini-name" title={s}>
+                  {s}
+                </span>
+                <button className="snap-mini-btn" title="回滚" onClick={() => restoreSnapshot(s)}>
+                  ↩
+                </button>
+                <button
+                  className="snap-mini-btn danger"
+                  title="删除"
+                  onClick={() => deleteSnapshot(s)}
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       {editingMeta && (
@@ -165,7 +290,9 @@ export default function LeftPanel() {
             </div>
             <div className="modal-actions">
               <button onClick={() => setEditingMeta(false)}>取消</button>
-              <button className="primary" onClick={saveMeta}>保存</button>
+              <button className="primary" onClick={saveMeta}>
+                保存
+              </button>
             </div>
           </div>
         </div>

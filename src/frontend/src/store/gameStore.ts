@@ -64,6 +64,8 @@ interface GameState {
   eventsFilter: {
     participantCharId: number | null;
     eventType: string;
+    eventTypes: string | null;     // 多选：逗号分隔
+    charIds: string | number[] | null; // 多选角色，逗号或直接数组
     importanceMin: number;
     showRaw: boolean;
   };
@@ -129,6 +131,8 @@ export const useGameStore = create<GameState>((set, get) => ({
   eventsFilter: {
     participantCharId: null,
     eventType: '',
+    eventTypes: null,
+    charIds: null,
     importanceMin: 0,
     showRaw: false,
   },

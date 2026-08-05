@@ -74,15 +74,43 @@ def list_events(
     importance_min: int = 0,
     tick_from: Optional[int] = None,
     tick_to: Optional[int] = None,
+    char_ids: Optional[str] = None,
+    map_ids: Optional[str] = None,
+    event_types: Optional[str] = None,
 ):
-    """列出世界事件（按 tick 倒序）。"""
+    """列出世界事件（按 tick 倒序）。char_ids/map_ids/event_types 用逗号分隔 ID。"""
+    def split_ints(s: Optional[str]) -> Optional[List[int]]:
+        if not s:
+            return None
+        try:
+            arr = [int(x) for x in s.split(",") if x.strip()]
+            return arr or None
+        except ValueError:
+            return None
+    def split_strs(s: Optional[str]) -> Optional[List[str]]:
+        if not s:
+            return None
+        arr = [x.strip() for x in s.split(",") if x.strip()]
+        return arr or None
     return world_service.list_events(
         limit=limit,
         event_type=event_type,
         importance_min=importance_min,
         tick_from=tick_from,
         tick_to=tick_to,
+        char_ids=split_ints(char_ids),
+        map_ids=split_ints(map_ids),
+        event_types=split_strs(event_types),
     )
+
+
+@router.get("/events/{event_id}")
+def get_event(event_id: int, sm=Depends(require_active_save)):
+    """单条事件详情（含参与人、关联记忆）。"""
+    try:
+        return world_service.get_event_detail(event_id)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
 
 
 @router.post("/events/{event_id}/polish")

@@ -227,3 +227,28 @@ def set_prompt_active_version(name: str, version: str) -> Dict[str, Any]:
 
     _clear_cache(name)
     return {"name": name, "active_version": version}
+
+
+def delete_prompt_version(name: str, version: str) -> Dict[str, Any]:
+    """删除某个 prompt 版本目录。
+    规则同 delete_skill_version：至少保留一个版本，删除激活版本前先切。
+    """
+    fp = get_prompt(name)
+    if not fp:
+        raise FileNotFoundError(f"prompt {name} 不存在")
+    if version not in fp.versions:
+        raise FileNotFoundError(f"版本 {version} 不存在")
+    if len(fp.versions) <= 1:
+        raise ValueError("至少保留一个版本，禁止删除")
+
+    if fp.default_version == version:
+        remaining = [v for v in fp.versions.keys() if v != version]
+        new_active = sorted(remaining)[0]
+        config_path = fp.prompt_dir / "config.json"
+        config = fp.config.copy()
+        config["default_version"] = new_active
+        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    shutil.rmtree(str(fp.versions[version].version_dir), ignore_errors=True)
+    _clear_cache(name)
+    return {"name": name, "deleted_version": version}

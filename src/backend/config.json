@@ -14,7 +14,11 @@
     "tps_max": 240.0,
     "max_events_per_tick": 20,
     "memory_decay_per_tick": 0.01,
-    "heatmap_update_interval_ticks": 10
+    "heatmap_update_interval_ticks": 10,
+    "gore_enabled": false,
+    "adult_content": false,
+    "violence_level": 1,
+    "polish_length": "medium"
   },
   "memory": {
     "retrieve_max_default": 30,

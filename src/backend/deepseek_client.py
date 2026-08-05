@@ -55,31 +55,50 @@ def chat_completion(
     temperature: float = 0.7,
     max_tokens: int = 2048,
     model: Optional[str] = None,
+    max_tool_rounds: int = 5,
+    tool_executor: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """同步调用 LLM。
 
+    支持完整的 tool calling 循环：
+    1. 调用 LLM
+    2. 若返回 tool_calls，用 tool_executor 执行每个工具
+    3. 把 tool 结果作为 tool message 加入 messages
+    4. 再次调用 LLM
+    5. 重复直到 LLM 不再返回 tool_calls 或达到 max_tool_rounds
+
+    Args:
+        tools: OpenAI function schema 列表
+        tool_choice: "auto" / "none" / "required"
+        max_tool_rounds: 最大工具调用轮次（防死循环）
+        tool_executor: 可调用对象 tool_executor(name, args) -> result，
+                       若为 None 则不执行工具（只返回 raw tool_calls）
+
     返回:
         {
-            "content": str,                  # LLM 文本回复
-            "tool_calls": List[Dict] | None, # 工具调用列表
-            "raw": Any,                       # 原始响应
-            "usage": Dict | None,             # token 统计
-            "elapsed_ms": int,                # 耗时
+            "content": str,                  # 最终 LLM 文本回复（最后一轮）
+            "reasoning_content": str | None, # 思考过程（V4 Flash 特有）
+            "tool_calls": List[Dict] | None, # 累计工具调用列表
+            "tool_results": List[Dict],      # 工具执行结果（每项 {name, arguments, result}）
+            "raw": Any,                       # 最后一次原始响应
+            "usage": Dict | None,            # 累计 token 统计
+            "elapsed_ms": int,                # 总耗时
             "mock": bool,                     # 是否为 mock 响应
+            "rounds": int,                    # 实际调用 LLM 的轮数
         }
     """
     # 先调 is_mock_mode() 触发 _get_client() 初始化 _mock_mode 标志
     # （避免首次调用时 _mock_mode 还是 False 但 client 为 None 的竞态）
     if is_mock_mode():
-        return {**_mock_response(system_prompt, user_prompt, tools), "mock": True}
+        return {**_mock_response(system_prompt, user_prompt, tools), "mock": True, "tool_results": [], "rounds": 1}
 
     client = _get_client()
-    messages = [
+    messages: List[Dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
     kwargs: Dict[str, Any] = {
-        "model": model or os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+        "model": model or os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -90,35 +109,105 @@ def chat_completion(
             kwargs["tool_choice"] = tool_choice
 
     t0 = time.time()
-    resp = client.chat.completions.create(**kwargs)  # type: ignore[union-attr]
+    all_tool_calls: List[Dict[str, Any]] = []
+    all_tool_results: List[Dict[str, Any]] = []
+    total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    last_resp = None
+    rounds = 0
+
+    while rounds < max_tool_rounds:
+        rounds += 1
+        resp = client.chat.completions.create(**kwargs)  # type: ignore[union-attr]
+        last_resp = resp
+        msg = resp.choices[0].message
+
+        # 累计 usage
+        if resp.usage:
+            total_usage["prompt_tokens"] += resp.usage.prompt_tokens
+            total_usage["completion_tokens"] += resp.usage.completion_tokens
+            total_usage["total_tokens"] += resp.usage.total_tokens
+
+        # 若无 tool_calls，已经得到最终回答，退出循环
+        if not msg.tool_calls:
+            break
+
+        # 有 tool_calls：执行并把结果加入 messages
+        # 1) 把 assistant 的 tool_calls 消息加入历史
+        messages.append({
+            "role": "assistant",
+            "content": msg.content or "",
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in msg.tool_calls
+            ],
+        })
+
+        # 2) 执行每个工具，加入对应的 tool 消息
+        for tc in msg.tool_calls:
+            tc_name = tc.function.name
+            try:
+                tc_args = tc.function.arguments
+                tc_args = json.loads(tc_args) if isinstance(tc_args, str) else tc_args
+            except json.JSONDecodeError:
+                tc_args = {}
+
+            all_tool_calls.append({"id": tc.id, "name": tc_name, "arguments": tc_args})
+
+            # 执行工具
+            tool_result_value: Any = None
+            if tool_executor is not None:
+                try:
+                    tool_result_value = tool_executor(tc_name, tc_args)
+                except Exception as ex:
+                    tool_result_value = {"error": f"{type(ex).__name__}: {ex}"}
+            else:
+                tool_result_value = {"_skipped": "no tool_executor provided"}
+
+            all_tool_results.append({
+                "tool": tc_name,
+                "arguments": tc_args,
+                "result": tool_result_value,
+            })
+
+            # 把工具结果作为 tool role 消息加入对话
+            # OpenAI 格式要求 tool role 的 content 是字符串
+            try:
+                tool_content = json.dumps(tool_result_value, ensure_ascii=False, default=str)
+            except (TypeError, ValueError):
+                tool_content = str(tool_result_value)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": tool_content,
+            })
+
+        # 更新 messages 给下一轮（已就地修改 messages）
+        kwargs["messages"] = messages
+        # 下一轮不再需要显式 tool_choice（让模型自主决定）
+        if "tool_choice" in kwargs and tool_choice != "required":
+            kwargs.pop("tool_choice", None)
+
     elapsed_ms = int((time.time() - t0) * 1000)
 
-    msg = resp.choices[0].message
-    tool_calls = None
-    if msg.tool_calls:
-        tool_calls = []
-        for tc in msg.tool_calls:
-            args = tc.function.arguments
-            try:
-                args = json.loads(args) if isinstance(args, str) else args
-            except json.JSONDecodeError:
-                pass
-            tool_calls.append({
-                "id": tc.id,
-                "name": tc.function.name,
-                "arguments": args,
-            })
+    # 取最后一轮的 message 作为最终回答
+    final_msg = last_resp.choices[0].message if last_resp else None
+    final_content = (final_msg.content if final_msg and final_msg.content else "") or ""
+    reasoning_content = getattr(final_msg, "reasoning_content", None) if final_msg else None
+
     return {
-        "content": msg.content or "",
-        "tool_calls": tool_calls,
-        "raw": resp,
-        "usage": {
-            "prompt_tokens": resp.usage.prompt_tokens if resp.usage else 0,
-            "completion_tokens": resp.usage.completion_tokens if resp.usage else 0,
-            "total_tokens": resp.usage.total_tokens if resp.usage else 0,
-        },
+        "content": final_content,
+        "reasoning_content": reasoning_content,
+        "tool_calls": all_tool_calls or None,
+        "tool_results": all_tool_results,
+        "raw": last_resp,
+        "usage": total_usage,
         "elapsed_ms": elapsed_ms,
         "mock": False,
+        "rounds": rounds,
     }
 
 
@@ -183,7 +272,9 @@ def _mock_response(
 
     return {
         "content": content,
+        "reasoning_content": None,
         "tool_calls": tool_calls,
+        "tool_results": [],
         "raw": None,
         "usage": {
             "prompt_tokens": len(system_prompt) // 3,
@@ -191,4 +282,6 @@ def _mock_response(
             "total_tokens": (len(system_prompt) + len(content)) // 3,
         },
         "elapsed_ms": 0,
+        "mock": True,
+        "rounds": 1,
     }

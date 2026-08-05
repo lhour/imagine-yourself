@@ -1,0 +1,92 @@
+.game-page {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 280px 1fr 320px;
+  grid-template-rows: 48px 1fr 300px;
+  grid-template-areas:
+    "top     top     top"
+    "left    main    right"
+    "bottom  bottom  bottom";
+  background: var(--bg, #f5f6fa);
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  color: #0f172a;
+}
+.gp-topbar { grid-area: top; }
+.gp-left { grid-area: left; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--border, #e5e7eb); }
+.gp-main { grid-area: main; min-width: 0; min-height: 0; overflow: hidden; }
+.gp-right { grid-area: right; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--border, #e5e7eb); }
+.gp-bottom { grid-area: bottom; min-width: 0; min-height: 0; overflow: hidden; border-top: 1px solid var(--border, #e5e7eb); background: #fff; display: flex; flex-direction: column; }
+
+.gp-collapsed { display: none; }
+
+.gp-collapse {
+  position: absolute;
+  top: 48px;
+  width: 20px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border: 1px solid var(--border, #e5e7eb);
+  cursor: pointer;
+  z-index: 30;
+  color: #64748b;
+  font-size: 12px;
+  border-radius: 0 6px 6px 0;
+  box-shadow: 0 1px 2px rgba(0,0,0,.06);
+}
+.gp-collapse-l { left: 0; border-left: none; }
+.gp-collapse-r { right: 0; border-radius: 6px 0 0 6px; border-right: none; }
+.gp-collapse-l.closed { left: 0; }
+.gp-collapse-r.closed { right: 0; }
+.gp-collapse:hover { background: #f1f5f9; color: #0f172a; }
+
+.game-page:has(.gp-left.gp-collapsed) {
+  grid-template-columns: 0 1fr 320px;
+}
+.game-page:has(.gp-right.gp-collapsed) {
+  grid-template-columns: 280px 1fr 0;
+}
+.game-page:has(.gp-left.gp-collapsed):has(.gp-right.gp-collapsed) {
+  grid-template-columns: 0 1fr 0;
+}
+
+.gp-bottom-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  background: #f8fafc;
+  flex-shrink: 0;
+}
+.gp-tab {
+  background: transparent;
+  border: none;
+  padding: 9px 16px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #64748b;
+  border-bottom: 2px solid transparent;
+  font-weight: 500;
+}
+.gp-tab.on {
+  color: var(--primary, #2563eb);
+  border-bottom-color: var(--primary, #2563eb);
+  background: #fff;
+}
+.gp-bottom-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.gp-bottom-player {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  min-height: 0;
+}

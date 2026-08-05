@@ -22,6 +22,13 @@ export const savesApi = {
   getProtagonist: () => api.get('/saves/protagonist').then((r) => r.data),
   setProtagonist: (charId: number) =>
     api.post('/saves/protagonist', { char_id: charId }).then((r) => r.data),
+  // 快照
+  listSnapshots: () => api.get('/saves/snapshots').then((r) => r.data),
+  createSnapshot: () => api.post('/saves/snapshots').then((r) => r.data),
+  restoreSnapshot: (snapshotFile: string) =>
+    api.post('/saves/snapshots/restore', null, { params: { snapshot_file: snapshotFile } }).then((r) => r.data),
+  deleteSnapshot: (snapshotFile: string) =>
+    api.delete(`/saves/snapshots/${snapshotFile}`).then((r) => r.data),
 };
 
 // ============================================================
@@ -30,7 +37,8 @@ export const savesApi = {
 
 export const entitiesApi = {
   list: <T>(slug: string, params?: Record<string, unknown>) =>
-    api.get<T[]>(`/entities/${slug}`, { params }).then((r) => r.data),
+    api.get<{ items: T[]; count: number; total: number }>(`/entities/${slug}`, { params })
+      .then((r) => r.data.items),
   get: <T>(slug: string, id: number) =>
     api.get<T>(`/entities/${slug}/${id}`).then((r) => r.data),
   create: <T>(slug: string, body: Partial<T>) =>
@@ -49,8 +57,17 @@ export const entitiesApi = {
 
 export const worldApi = {
   status: () => api.get('/world/status').then((r) => r.data),
-  events: (params?: { limit?: number; event_type?: string }) =>
-    api.get('/world/events', { params }).then((r) => r.data),
+  events: (params?: {
+    limit?: number;
+    event_type?: string;
+    event_types?: string;
+    importance_min?: number;
+    tick_from?: number;
+    tick_to?: number;
+    char_ids?: string;
+    map_ids?: string;
+  }) => api.get('/world/events', { params }).then((r) => r.data),
+  getEvent: (eventId: number) => api.get(`/world/events/${eventId}`).then((r) => r.data),
   createEvent: (body: Record<string, unknown>) =>
     api.post('/world/events', body).then((r) => r.data),
   tick: (seconds: number, maxActors: number = 5) =>
@@ -114,6 +131,12 @@ export const agentApi = {
     api.post('/agent/time_jump', { seconds }).then((r) => r.data),
   callSkill: (name: string, body: Record<string, unknown>) =>
     api.post(`/agent/skills/${name}/call`, body).then((r) => r.data),
+  testConnection: (body?: {
+    system_prompt?: string;
+    user_prompt?: string;
+    model?: string;
+  }) =>
+    api.post('/agent/_test_connection', body ?? {}).then((r) => r.data),
 
   // Skills
   listSkills: () =>
@@ -124,10 +147,20 @@ export const agentApi = {
     api.get(`/agent/skills/${name}/versions`).then((r) => r.data),
   getSkillVersion: (name: string, version: string) =>
     api.get(`/agent/skills/${name}/versions/${version}`).then((r) => r.data),
-  createSkillVersion: (name: string, body: { new_version: string; from_version?: string; skill_md?: string }) =>
+  createSkillVersion: (name: string, body: {
+    new_version: string;
+    from_version?: string;
+    skill_md?: string;
+    system_prompt?: string;
+  }) =>
     api.post(`/agent/skills/${name}/versions`, body).then((r) => r.data),
-  updateSkillVersion: (name: string, version: string, body: { skill_md?: string }) =>
+  updateSkillVersion: (name: string, version: string, body: {
+    skill_md?: string;
+    system_prompt?: string;
+  }) =>
     api.put(`/agent/skills/${name}/versions/${version}`, body).then((r) => r.data),
+  deleteSkillVersion: (name: string, version: string) =>
+    api.delete(`/agent/skills/${name}/versions/${version}`).then((r) => r.data),
   setSkillActive: (name: string, version: string) =>
     api.put(`/agent/skills/${name}/active`, { version }).then((r) => r.data),
   renderSkill: (name: string) =>
@@ -148,4 +181,69 @@ export const agentApi = {
   // Variables
   variables: () =>
     api.get('/agent/variables').then((r) => r.data),
+  // Prompts 版本管理
+  listPromptVersions: (name: string) =>
+    api.get(`/agent/prompts/${name}/versions`).then((r) => r.data),
+  getPromptVersion: (name: string, version: string) =>
+    api.get(`/agent/prompts/${name}/versions/${version}`).then((r) => r.data),
+  createPromptVersion: (name: string, body: {
+    new_version: string;
+    from_version?: string;
+    system_prompt?: string;
+    user_prompt?: string;
+  }) =>
+    api.post(`/agent/prompts/${name}/versions`, body).then((r) => r.data),
+  updatePromptVersion: (name: string, version: string, body: {
+    system_prompt?: string;
+    user_prompt?: string;
+  }) =>
+    api.put(`/agent/prompts/${name}/versions/${version}`, body).then((r) => r.data),
+  deletePromptVersion: (name: string, version: string) =>
+    api.delete(`/agent/prompts/${name}/versions/${version}`).then((r) => r.data),
+  setPromptActive: (name: string, version: string) =>
+    api.put(`/agent/prompts/${name}/active`, { version }).then((r) => r.data),
+  renderPrompt: (name: string) =>
+    api.get(`/agent/prompts/${name}/render`).then((r) => r.data),
+};
+
+// ============================================================
+// 剧本管理
+// ============================================================
+
+export const dramasApi = {
+  list: () => api.get('/dramas').then((r) => r.data.items),
+  get: (name: string) => api.get(`/dramas/${name}`).then((r) => r.data),
+  validate: (name: string) => api.get(`/dramas/${name}/validate`).then((r) => r.data),
+  preview: (name: string) => api.get(`/dramas/${name}/preview`).then((r) => r.data),
+  init: (name: string, saveName: string, overwrite = false) =>
+    api.post(`/dramas/${name}/init`, { save_name: saveName, overwrite }).then((r) => r.data),
+  patchFile: (name: string, fileName: string, content: string) =>
+    api.patch(`/dramas/${name}`, { file_name: fileName, content }).then((r) => r.data),
+  delete: (name: string) => api.delete(`/dramas/${name}`).then((r) => r.data),
+  generate: (
+    prompt: string,
+    name?: string,
+    opts?: {
+      skip_steps?: string;
+      only_steps?: string;
+    }
+  ) =>
+    api.post('/dramas/_generate', { prompt, name, ...(opts ?? {}) }).then((r) => r.data),
+  generateStep: (name: string, step: number) =>
+    api.post(`/dramas/${name}/_generate_step`, { step }).then((r) => r.data),
+  generateStatus: (name: string) =>
+    api.get(`/dramas/${name}/_generate_status`).then((r) => r.data),
+  exportZip: (name: string) =>
+    api.get(`/dramas/${name}/export`, { responseType: 'blob' }).then((r) => r.data),
+};
+
+// ============================================================
+// 全局配置
+// ============================================================
+
+export const configApi = {
+  get: () => api.get('/config').then((r) => r.data),
+  patch: (body: Record<string, unknown>) =>
+    api.patch('/config', body).then((r) => r.data),
+  reset: () => api.post('/config/_reset').then((r) => r.data),
 };

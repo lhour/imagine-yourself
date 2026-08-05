@@ -65,7 +65,7 @@ export default function RightPanel() {
 // 角色
 // ============================================================
 function CharacterTab({ chars, onRefresh }: { chars: Character[]; onRefresh: () => void }) {
-  if (chars.length === 0) {
+  if (!Array.isArray(chars) || chars.length === 0) {
     return <EmptyHint text="尚无角色" onRefresh={onRefresh} />;
   }
   return (
@@ -93,7 +93,7 @@ function CharacterTab({ chars, onRefresh }: { chars: Character[]; onRefresh: () 
 // 群体
 // ============================================================
 function GroupTab({ groups, onRefresh }: { groups: Group[]; onRefresh: () => void }) {
-  if (groups.length === 0) {
+  if (!Array.isArray(groups) || groups.length === 0) {
     return <EmptyHint text="尚无群体" onRefresh={onRefresh} />;
   }
   return (
@@ -121,7 +121,7 @@ function GroupTab({ groups, onRefresh }: { groups: Group[]; onRefresh: () => voi
 // 物品
 // ============================================================
 function ItemTab({ items, onRefresh }: { items: Item[]; onRefresh: () => void }) {
-  if (items.length === 0) {
+  if (!Array.isArray(items) || items.length === 0) {
     return <EmptyHint text="尚无物品" onRefresh={onRefresh} />;
   }
   return (
@@ -154,7 +154,7 @@ function MapTab({
   onRefresh: () => void;
   onOpen: (mapId?: number | null) => void;
 }) {
-  if (maps.length === 0) {
+  if (!Array.isArray(maps) || maps.length === 0) {
     return <EmptyHint text="尚无地图" onRefresh={onRefresh} />;
   }
   // 按 parent_map_id 组织成树

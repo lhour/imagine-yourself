@@ -81,3 +81,6 @@ ehthumbs.db
 # ================ LLM 客户端缓存 ================
 *.cache
 cache/
+
+
+.edge*

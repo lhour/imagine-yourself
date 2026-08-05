@@ -1,19 +1,25 @@
-"""src.backend.service.drama_service — 剧本管理：扫描 / 读取 / 导入存档。
+"""src.backend.service.drama_service — 剧本管理：扫描 / 读取 / 导入存档 / 校验。
 
 核心函数：
 - list_dramas(): 列出 backend/drama/ 下所有剧本目录
 - get_drama(name): 剧本详情（meta 信息 + 文件清单）
+- validate_drama(name): **严格 9+1 校验**（文件齐全 + 结构 + 引用一致）
 - init_drama(name, save_name, overwrite=False):
-    1. 新建或覆盖存档
-    2. 读 9+1 文件（meta/characters/groups/group_hierarchies/items/
-       maps/map_features/events/settings/plot_planning）
-    3. 按顺序批量写入（处理 name→ID 引用解析）
-- preview(name): 在线预览 9+1 文件内容（前端 8 分屏预览用）
+    1. 先调用 validate_drama 严格校验
+    2. 新建或覆盖存档
+    3. 读 9+1 文件写入存档（处理 name→ID 引用解析）
+- preview(name): 在线预览 9+1 文件内容（前端卡片化预览用）
+- patch_drama_file(name, file_name, content): **原子写**（写临时文件 + os.replace）
+- export_drama_zip(name): 导出 10 个文件为 zip（内存中打包）
 """
 
 from __future__ import annotations
 
+import io
 import json
+import os
+import tempfile
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,6 +29,34 @@ from src.backend.storage import models
 from src.backend.storage.connection import SaveManager, default_save_manager
 
 DRAMA_DIR = BACKEND_DIR / "drama"
+
+REQUIRED_FILES = [
+    "meta.txt",
+    "characters.txt",
+    "groups.txt",
+    "group_hierarchies.txt",
+    "items.txt",
+    "maps.txt",
+    "map_features.txt",
+    "events.txt",
+    "settings.txt",
+    "plot_planning.txt",
+]
+
+# 每个 JSONL 文件至少需要的字段（软校验，字段缺失只 warning）
+REQUIRED_FIELDS: Dict[str, List[str]] = {
+    "characters.txt": ["name"],
+    "groups.txt": ["name"],
+    "group_hierarchies.txt": [],   # child_group_name / parent_group_name 也可
+    "items.txt": ["name"],
+    "maps.txt": ["name"],
+    "map_features.txt": [],        # feature 可匿名
+    "events.txt": ["content_raw"],
+    "settings.txt": ["title"],
+    "plot_planning.txt": [],       # plot 节点可只含 plot 字段
+}
+
+IMPORTANCE_RANGE = (0, 5)
 
 
 # ============================================================
@@ -153,8 +187,231 @@ def delete_drama(name: str) -> bool:
     return True
 
 
+# ============================================================
+# 严格校验：validate_drama — 9+1 文件齐全 + 结构合法 + 引用一致
+# ============================================================
+
+def validate_drama(name: str) -> Dict[str, Any]:
+    """严格校验剧本：
+    返回 { ok, errors: [...], warnings: [...], info: {...} }
+    - errors: 阻断导入的严重错误
+    - warnings: 不阻断但建议修复
+    """
+    p = DRAMA_DIR / name
+    errors: List[str] = []
+    warnings: List[str] = []
+    info: Dict[str, Any] = {}
+
+    # --- 1. 目录存在 ---
+    if not p.is_dir():
+        errors.append(f"剧本目录不存在：{p}")
+        return {"ok": False, "errors": errors, "warnings": warnings, "info": info}
+
+    # --- 2. 10 文件齐全 ---
+    existing_files = {f.name for f in p.iterdir() if f.is_file()}
+    for rf in REQUIRED_FILES:
+        if rf not in existing_files:
+            errors.append(f"缺少核心文件：{rf}")
+    info["missing_files"] = [rf for rf in REQUIRED_FILES if rf not in existing_files]
+
+    # 读取每个文件内容
+    data: Dict[str, Any] = {}
+    for fname in REQUIRED_FILES:
+        fp = p / fname
+        if not fp.is_file():
+            data[fname] = None
+            continue
+        try:
+            if fname == "meta.txt":
+                data[fname] = _load_json(fp)
+            else:
+                data[fname] = _load_jsonl(fp)
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+            errors.append(f"{fname} 格式错误：{e}")
+            data[fname] = None
+
+    # --- 3. meta.txt 校验 ---
+    meta = data.get("meta.txt")
+    if meta and isinstance(meta, dict):
+        if not meta.get("start_game_time"):
+            warnings.append("meta.txt 缺少 start_game_time（导入后默认空字符串）")
+        if not meta.get("name"):
+            warnings.append("meta.txt 缺少 name（将使用目录名）")
+        info["title"] = meta.get("name") or name
+        info["protagonist_default"] = meta.get("protagonist_name_default")
+        info["era_name"] = meta.get("era_name")
+    else:
+        errors.append("meta.txt 无法解析为 JSON 对象")
+        meta = {}
+
+    # --- 4. 行数统计 + 每行字段完整性 ---
+    row_counts: Dict[str, int] = {}
+    names_by_file: Dict[str, set] = {}
+    for fname in REQUIRED_FILES:
+        if fname == "meta.txt" or data[fname] is None:
+            continue
+        rows = data[fname]
+        if not isinstance(rows, list):
+            errors.append(f"{fname} 解析结果不是数组")
+            continue
+        row_counts[fname] = len(rows)
+        names: set = set()
+        for i, row in enumerate(rows, 1):
+            if not isinstance(row, dict):
+                errors.append(f"{fname} 第{i}行不是 JSON 对象")
+                continue
+            # 必填字段软校验
+            for rfld in REQUIRED_FIELDS.get(fname, []):
+                if rfld not in row or row[rfld] in (None, ""):
+                    warnings.append(f"{fname} 第{i}行缺少字段 {rfld}")
+            # importance 范围
+            if "importance" in row:
+                try:
+                    imp = int(row["importance"])
+                except (TypeError, ValueError):
+                    warnings.append(f"{fname} 第{i}行 importance 非整数，使用默认3")
+                else:
+                    if not (IMPORTANCE_RANGE[0] <= imp <= IMPORTANCE_RANGE[1]):
+                        warnings.append(
+                            f"{fname} 第{i}行 importance={imp} 超出范围 {IMPORTANCE_RANGE}，导入时自动 clamp"
+                        )
+            # 名称去重
+            for nk in ("name", "title", "char_name", "group_name", "map_name", "item_name"):
+                if nk in row and isinstance(row[nk], str) and row[nk].strip():
+                    nv = row[nk].strip()
+                    if nv in names:
+                        warnings.append(f"{fname} 第{i}行 {nk}={nv} 与前面行重复，可能导致引用歧义")
+                    names.add(nv)
+                    break
+        names_by_file[fname] = names
+    info["row_counts"] = row_counts
+
+    # --- 5. 交叉引用一致性校验 ---
+    # 提取各实体名集合
+    char_names = names_by_file.get("characters.txt", set())
+    group_names = names_by_file.get("groups.txt", set())
+    map_names = names_by_file.get("maps.txt", set())
+    item_names = names_by_file.get("items.txt", set())
+
+    info["counts"] = {
+        "characters": len(char_names),
+        "groups": len(group_names),
+        "maps": len(map_names),
+        "items": len(item_names),
+    }
+
+    # protagonist 默认存在
+    protag = meta.get("protagonist_name_default") if isinstance(meta, dict) else None
+    if protag and protag not in char_names:
+        errors.append(f"meta.txt protagonist_name_default={protag} 不在 characters.txt 中")
+
+    # groups.leader_name
+    if isinstance(data.get("groups.txt"), list):
+        for i, row in enumerate(data["groups.txt"], 1):
+            for k in ("leader_name", "leader_id_alias"):
+                if row.get(k) and row[k] not in char_names:
+                    warnings.append(f"groups.txt 第{i}行 {k}={row[k]} 不在角色列表中（导入时置空）")
+            if row.get("primary_map_name") and row["primary_map_name"] not in map_names:
+                warnings.append(f"groups.txt 第{i}行 primary_map_name={row['primary_map_name']} 不在地图列表中")
+
+    # group_hierarchies 引用
+    if isinstance(data.get("group_hierarchies.txt"), list):
+        for i, row in enumerate(data["group_hierarchies.txt"], 1):
+            child = row.get("child_group") or row.get("child_group_name")
+            parent = row.get("parent_group") or row.get("parent_group_name")
+            if child and child not in group_names:
+                warnings.append(f"group_hierarchies.txt 第{i}行 child_group={child} 不在群体列表中，将跳过")
+            if parent and parent not in group_names:
+                warnings.append(f"group_hierarchies.txt 第{i}行 parent_group={parent} 不在群体列表中，将跳过")
+
+    # maps.parent_map_name / current_map_name
+    if isinstance(data.get("maps.txt"), list):
+        for i, row in enumerate(data["maps.txt"], 1):
+            for refk, target_set in [
+                ("parent_map_name", map_names),
+                ("current_map_name", map_names),
+                ("carrier_char_name", char_names),
+                ("carrier_item_name", item_names),
+            ]:
+                if row.get(refk) and row[refk] not in target_set:
+                    warnings.append(f"maps.txt 第{i}行 {refk}={row[refk]} 引用不存在（导入时置空）")
+
+    # map_features.map_name / child_map_name / carrier_*
+    if isinstance(data.get("map_features.txt"), list):
+        for i, row in enumerate(data["map_features.txt"], 1):
+            if row.get("map_name") and row["map_name"] not in map_names:
+                warnings.append(f"map_features.txt 第{i}行 map_name={row['map_name']} 引用不存在")
+            if row.get("child_map_name") and row["child_map_name"] not in map_names:
+                warnings.append(f"map_features.txt 第{i}行 child_map_name={row['child_map_name']} 引用不存在")
+            ct = row.get("carrier_type")
+            cn = row.get("carrier_char_name") or row.get("carrier_name")
+            in_ = row.get("carrier_item_name") or row.get("carrier_name")
+            if ct == "character" and cn and cn not in char_names:
+                warnings.append(f"map_features.txt 第{i}行 carrier_char_name={cn} 不在角色列表中")
+            if ct == "item" and in_ and in_ not in item_names:
+                warnings.append(f"map_features.txt 第{i}行 carrier_item_name={in_} 不在物品列表中")
+
+    # characters.location_map_name / groups_member
+    if isinstance(data.get("characters.txt"), list):
+        for i, row in enumerate(data["characters.txt"], 1):
+            if row.get("location_map_name") and row["location_map_name"] not in map_names:
+                warnings.append(f"characters.txt 第{i}行 location_map_name={row['location_map_name']} 引用不存在")
+            for mem in row.get("groups_member") or []:
+                gname = mem.get("group_name") if isinstance(mem, dict) else None
+                if gname and gname not in group_names:
+                    warnings.append(f"characters.txt 第{i}行 groups_member.group_name={gname} 引用不存在")
+
+    # items.holder_name
+    if isinstance(data.get("items.txt"), list):
+        for i, row in enumerate(data["items.txt"], 1):
+            holder = row.get("holder_name") or row.get("owner_name")
+            if holder and holder not in char_names:
+                warnings.append(f"items.txt 第{i}行 holder_name={holder} 不在角色列表中（导入时不创建持有关系）")
+
+    # events.location_map_name / participants
+    if isinstance(data.get("events.txt"), list):
+        for i, row in enumerate(data["events.txt"], 1):
+            if row.get("location_map_name") and row["location_map_name"] not in map_names:
+                warnings.append(f"events.txt 第{i}行 location_map_name={row['location_map_name']} 引用不存在")
+            for p in row.get("participants") or []:
+                if not isinstance(p, dict):
+                    continue
+                pt = p.get("participant_type", "character")
+                pname = p.get("participant_name") or p.get("name")
+                target = {
+                    "character": char_names,
+                    "group": group_names,
+                    "item": item_names,
+                    "map": map_names,
+                }.get(pt, set())
+                if pname and pname not in target:
+                    warnings.append(
+                        f"events.txt 第{i}行 participant {pt}:{pname} 引用不存在"
+                    )
+
+    # plot_planning 存在即可（只写入主角 quest，不强校验）
+    pp = data.get("plot_planning.txt")
+    if isinstance(pp, list):
+        info["counts"]["plot_planning"] = len(pp)
+        if len(pp) > 0 and not protag:
+            warnings.append("plot_planning.txt 有内容但 meta.txt 未指定 protagonist_name_default（写入时将跳过）")
+
+    ok = len(errors) == 0
+    info["ok"] = ok
+    return {
+        "ok": ok,
+        "errors": errors,
+        "warnings": warnings,
+        "info": info,
+    }
+
+
 def patch_drama_file(name: str, file_name: str, content: str) -> bool:
-    """覆写单个剧本文件内容（管理员模式）。"""
+    """**原子写** 单个剧本文件内容：
+    1. 写临时文件（同目录 .{file_name}.tmpXXXX）
+    2. os.replace 原子替换
+    保证失败时原文件内容不变
+    """
     allowed = {
         "meta.txt", "characters.txt", "groups.txt", "group_hierarchies.txt",
         "items.txt", "maps.txt", "map_features.txt", "events.txt",
@@ -164,8 +421,44 @@ def patch_drama_file(name: str, file_name: str, content: str) -> bool:
         raise ValueError(f"不允许编辑文件 {file_name}")
     p = DRAMA_DIR / name / file_name
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content.rstrip() + "\n", encoding="utf-8")
+    dir_path = str(p.parent)
+    final_path = str(p)
+    # 在同目录创建临时文件，确保同卷（os.replace 要求同卷）
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{file_name}.tmp",
+        dir=dir_path,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content.rstrip() + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, final_path)
+    except Exception:
+        # 清理临时文件
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     return True
+
+
+def export_drama_zip(name: str) -> bytes:
+    """将剧本 10 个核心文件打包为 zip（内存中构建，返回 bytes）。"""
+    p = DRAMA_DIR / name
+    if not p.is_dir():
+        raise FileNotFoundError(f"剧本 {name} 不存在")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fname in REQUIRED_FILES:
+            fp = p / fname
+            if fp.is_file():
+                zf.write(str(fp), arcname=f"{name}/{fname}")
+            else:
+                # 空文件占位（带注释）
+                zf.writestr(f"{name}/{fname}", f"# （{fname} 缺失）\n")
+    return buf.getvalue()
 
 
 # ============================================================
@@ -196,6 +489,13 @@ def init_drama(
     drama_path = DRAMA_DIR / name
     if not drama_path.is_dir():
         raise FileNotFoundError(f"剧本 {name} 不存在")
+
+    # --- 0. 严格校验（errors 阻断 / warnings 只记录在返回值 stats.validation 中）---
+    vr = validate_drama(name)
+    if not vr["ok"]:
+        raise ValueError(
+            "剧本校验失败（严重错误）：\n" + "\n".join(f"- {e}" for e in vr["errors"])
+        )
 
     meta = _load_json(drama_path / "meta.txt")
     characters_rows = _load_jsonl(drama_path / "characters.txt")
@@ -610,6 +910,12 @@ def init_drama(
             )
             plot_count += 1
     stats["plot_planning"] = plot_count
+
+    # 记录校验 warnings 供前端提示用户
+    stats["validation"] = {
+        "warning_count": len(vr["warnings"]),
+        "warnings": vr["warnings"][:50],  # 最多返回前 50 条
+    }
 
     # 返回前释放活动连接，避免 Windows 上其他 SaveManager 无法删除该 db 文件
     sm.close_active()

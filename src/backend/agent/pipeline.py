@@ -80,25 +80,23 @@ def call_skill(
         tool_names.extend(extra_tools)
     tools_schema = ToolManager.schemas_for(tool_names)
 
-    # 调 LLM
+    # 调 LLM（启用完整 tool calling 循环：LLM 调工具→拿结果→再推理→直到产出最终回答）
+    def _tool_executor(name: str, args: Dict[str, Any]) -> Any:
+        """LLM 工具执行回调：把工具调用委托给 ToolManager。"""
+        return ToolManager.execute(name, args)
+
     resp = deepseek_client.chat_completion(
         system_prompt=system_prompt,
         user_prompt=user_prompt or "(无 user prompt，按 system 指令执行)",
         tools=tools_schema if tools_schema else None,
         temperature=temperature,
         max_tokens=max_tokens,
+        max_tool_rounds=5,
+        tool_executor=_tool_executor if tools_schema else None,
     )
 
-    # 执行 tool_calls
-    tool_results: List[Dict[str, Any]] = []
-    if resp.get("tool_calls"):
-        for tc in resp["tool_calls"]:
-            result = ToolManager.execute(tc["name"], tc.get("arguments", {}))
-            tool_results.append({
-                "tool": tc["name"],
-                "arguments": tc.get("arguments"),
-                "result": result,
-            })
+    # tool_results 由 deepseek_client 内部已执行并收集
+    tool_results: List[Dict[str, Any]] = resp.get("tool_results", [])
 
     # 尝试解析 content 为 JSON
     content = resp.get("content", "")
@@ -124,6 +122,7 @@ def call_skill(
         "tool_results": tool_results,
         "usage": resp.get("usage"),
         "elapsed_ms": resp.get("elapsed_ms"),
+        "rounds": resp.get("rounds", 1),
         "mock": deepseek_client.is_mock_mode(),
     }
 
@@ -201,6 +200,19 @@ def tick_once(seconds: int = 60, max_actors: int = 5) -> Dict[str, Any]:
         user_prompt=f"本 tick 角色决策列表：\n{decisions_json}\n请合成世界事件。",
     )
     events_created: List[int] = []
+
+    # 5a. 新模式：LLM 通过 world_create_event 工具直接创建事件
+    for tr in wr_result.get("tool_results", []):
+        if tr.get("tool") == "world_create_event":
+            result = tr.get("result", {})
+            if isinstance(result, dict):
+                # create_event 返回 {"id": ..., ...}；失败时返回 {"error": ...}
+                if result.get("id"):
+                    events_created.append(result["id"])
+                elif result.get("error"):
+                    trace.append({"step": 5, "error": f"world_create_event 失败: {result['error']}"})
+
+    # 5b. 兼容旧模式：LLM 在 content 中返回 JSON {"events": [...]}
     if wr_result.get("parsed") and isinstance(wr_result["parsed"], dict):
         for ev in wr_result["parsed"].get("events", []):
             try:
@@ -215,7 +227,13 @@ def tick_once(seconds: int = 60, max_actors: int = 5) -> Dict[str, Any]:
                 events_created.append(e["id"])
             except Exception as ex:
                 trace.append({"step": 5, "error": f"事件创建失败: {ex}"})
-    trace.append({"step": 5, "name": "world_react", "events_created": events_created, "mock": wr_result["mock"]})
+    trace.append({
+        "step": 5, "name": "world_react",
+        "events_created": events_created,
+        "mock": wr_result["mock"],
+        "tool_results_count": len(wr_result.get("tool_results", [])),
+        "rounds": wr_result.get("rounds", 1),
+    })
 
     # ---- Step 6: 事件编码为记忆 ----
     encoded_total = 0
@@ -228,6 +246,8 @@ def tick_once(seconds: int = 60, max_actors: int = 5) -> Dict[str, Any]:
     trace.append({"step": 6, "name": "memory_encode", "encoded": encoded_total})
 
     # ---- Step 7: 事件润色 ----
+    # 大部分情况下，LLM 在 step 5 通过 world_create_event 工具创建事件时
+    # 已经传入了 content_polished 字段，这里只对未润色的事件做兜底。
     polished = 0
     for eid in events_created:
         ev = models.Event.get(eid)
@@ -236,6 +256,7 @@ def tick_once(seconds: int = 60, max_actors: int = 5) -> Dict[str, Any]:
                 "event_polisher",
                 user_prompt=f"事件 raw：{ev.content_raw}\n请润色为 polished 文本。",
             )
+            # 7a. 优先使用 LLM 在 content 中的回复
             polished_text = ep_result.get("content", "").strip()
             # 去掉 markdown 代码块包裹
             if polished_text.startswith("```"):
@@ -246,7 +267,18 @@ def tick_once(seconds: int = 60, max_actors: int = 5) -> Dict[str, Any]:
             if polished_text:
                 models.Event.update(eid, content_polished=polished_text)
                 polished += 1
-    trace.append({"step": 7, "name": "event_polisher", "polished": polished})
+            else:
+                # 7b. LLM 可能通过 world_polish_event 工具直接润色了
+                for tr in ep_result.get("tool_results", []):
+                    if tr.get("tool") == "world_polish_event":
+                        polished += 1
+                        break
+    # 统计事件创建时已经带 polished 的数量
+    pre_polished = sum(
+        1 for eid in events_created
+        if (ev := models.Event.get(eid)) and ev.content_polished
+    )
+    trace.append({"step": 7, "name": "event_polisher", "polished": polished, "pre_polished": pre_polished})
 
     return {
         "tick": meta["tick_num"],

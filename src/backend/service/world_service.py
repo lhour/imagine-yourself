@@ -119,19 +119,115 @@ def create_event(
     return e.to_dict()
 
 
+def _inject_event_meta(items: List[models.Event]) -> List[Dict[str, Any]]:
+    """把事件的参与人（含角色名）和谁记得/谁忘了一起注入。"""
+    if not items:
+        return []
+    event_ids = [e.id for e in items]
+    placeholder = ",".join("?" * len(event_ids))
+
+    # ---- 参与人：联角色名、群体名、物品名、地图名 ----
+    sm_conn = default_save_manager()._conn  # type: ignore[union-attr]
+    participant_rows = sm_conn.execute(
+        f"""
+        SELECT ep.id, ep.event_id, ep.participant_type, ep.participant_id,
+               ep.role_raw, ep.perception_raw,
+               c.name AS char_name, g.name AS group_name,
+               i.name AS item_name, m.name AS map_name
+        FROM event_participants ep
+        LEFT JOIN characters c ON ep.participant_type = 'character' AND ep.participant_id = c.id
+        LEFT JOIN groups g     ON ep.participant_type = 'group'     AND ep.participant_id = g.id
+        LEFT JOIN items i      ON ep.participant_type = 'item'      AND ep.participant_id = i.id
+        LEFT JOIN maps m       ON ep.participant_type = 'map'       AND ep.participant_id = m.id
+        WHERE ep.event_id IN ({placeholder})
+        ORDER BY ep.id ASC
+        """,
+        event_ids,
+    ).fetchall()
+    participants_by_event: Dict[int, List[Dict[str, Any]]] = {}
+    for r in participant_rows:
+        r2 = dict(r)
+        ptype = r2["participant_type"]
+        display = (
+            r2.get("char_name") or r2.get("group_name") or
+            r2.get("item_name") or r2.get("map_name") or
+            f"#{r2['participant_id']}"
+        )
+        r2["name"] = display
+        participants_by_event.setdefault(r2["event_id"], []).append({
+            "id": r2["id"],
+            "event_id": r2["event_id"],
+            "participant_type": ptype,
+            "participant_id": r2["participant_id"],
+            "role_raw": r2["role_raw"],
+            "perception_raw": r2["perception_raw"],
+            "name": display,
+        })
+
+    # ---- 每条记忆关联到的事件：谁记得 / 谁遗忘（forget_prob>=0.8 算忘）----
+    mem_rows = sm_conn.execute(
+        f"""
+        SELECT m.source_event_id, m.char_id, m.depth, m.correctness,
+               m.forget_prob, m.is_false, c.name AS char_name
+        FROM memories m
+        LEFT JOIN characters c ON m.char_id = c.id
+        WHERE m.source_event_id IN ({placeholder})
+        """,
+        event_ids,
+    ).fetchall()
+    remembered_by: Dict[int, List[Dict[str, Any]]] = {}
+    forgotten_by: Dict[int, List[Dict[str, Any]]] = {}
+    for r in mem_rows:
+        r2 = dict(r)
+        eid = r2["source_event_id"]
+        if eid is None:
+            continue
+        entry = {
+            "char_id": r2["char_id"],
+            "char_name": r2.get("char_name") or f"#{r2['char_id']}",
+            "depth": r2["depth"],
+            "correctness": r2["correctness"],
+            "forget_prob": r2["forget_prob"],
+            "is_false": bool(r2["is_false"]),
+        }
+        if (r2.get("forget_prob") or 0) >= 0.8:
+            forgotten_by.setdefault(eid, []).append(entry)
+        else:
+            remembered_by.setdefault(eid, []).append(entry)
+
+    out: List[Dict[str, Any]] = []
+    for e in items:
+        d = e.to_dict()
+        pid = e.id
+        d["participants"] = participants_by_event.get(pid, [])
+        d["remembered_by"] = remembered_by.get(pid, [])
+        d["forgotten_by"] = forgotten_by.get(pid, [])
+        out.append(d)
+    return out
+
+
 def list_events(
     limit: int = 100,
     event_type: Optional[str] = None,
     importance_min: int = 0,
     tick_from: Optional[int] = None,
     tick_to: Optional[int] = None,
+    char_ids: Optional[List[int]] = None,
+    map_ids: Optional[List[int]] = None,
+    event_types: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """列出世界事件（按 tick 倒序、id 倒序，最新在上）。"""
+    """列出世界事件（按 tick 倒序、id 倒序，最新在上）。
+    额外支持按角色/地点多条件筛选，返回时注入参与人和记忆可见性。
+    """
     where_parts: List[str] = []
-    params: list = []
+    params: List[Any] = []
     if event_type:
         where_parts.append("event_type = ?")
         params.append(event_type)
+    if event_types:
+        place = ",".join("?" * len(event_types))
+        where_parts.append(f"event_type IN ({place})")
+        params.extend(event_types)
     if importance_min > 0:
         where_parts.append("importance >= ?")
         params.append(importance_min)
@@ -141,12 +237,45 @@ def list_events(
     if tick_to is not None:
         where_parts.append("tick_num <= ?")
         params.append(tick_to)
+    if char_ids:
+        where_parts.append(
+            "id IN (SELECT event_id FROM event_participants "
+            "WHERE participant_type = 'character' AND participant_id IN ("
+            + ",".join("?" * len(char_ids)) + "))"
+        )
+        params.extend(char_ids)
+    if map_ids:
+        place = ",".join("?" * len(map_ids))
+        where_parts.append(f"location_map_id IN ({place})")
+        params.extend(map_ids)
     where = " AND ".join(where_parts) if where_parts else ""
     items = models.Event.list(
         where=where, params=params, order_by="tick_num DESC, id DESC", limit=limit
     )
     total = models.Event.count(where=where, params=params)
-    return {"items": [e.to_dict() for e in items], "count": len(items), "total": total}
+    return {"items": _inject_event_meta(items), "count": len(items), "total": total}
+
+
+def get_event_detail(event_id: int) -> Dict[str, Any]:
+    """单条事件详情（含参与人、关联记忆列表）。"""
+    e = models.Event.get(event_id)
+    if not e:
+        raise FileNotFoundError(f"事件 {event_id} 不存在")
+    injected = _inject_event_meta([e])
+    d = injected[0]
+    # 追加关联记忆全量（含 memory_polished 供弹窗展示）
+    sm_conn = default_save_manager()._conn  # type: ignore[union-attr]
+    mems = sm_conn.execute(
+        """
+        SELECT m.*, c.name AS char_name FROM memories m
+        LEFT JOIN characters c ON m.char_id = c.id
+        WHERE source_event_id = ?
+        ORDER BY depth DESC, remember_tick DESC
+        """,
+        [event_id],
+    ).fetchall()
+    d["linked_memories"] = [dict(r) for r in mems]
+    return d
 
 
 def tick_once(seconds: int = 60) -> Dict[str, Any]:
