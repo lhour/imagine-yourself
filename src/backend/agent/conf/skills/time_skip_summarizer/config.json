@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "时间跨越摘要器：生成跨度的史诗叙述与里程碑事件",
+  "tools": ["world_create_event", "world_recent_events", "character_filter", "character_bulk_update", "map_features"],
+  "params": {}
+}

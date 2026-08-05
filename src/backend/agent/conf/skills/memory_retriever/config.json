@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "按需加载角色记忆：先返回印象摘要，再按深度概率抽样",
+  "tools": ["memory_retrieve", "memory_palace"],
+  "params": {}
+}

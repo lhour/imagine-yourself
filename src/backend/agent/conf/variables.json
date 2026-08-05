@@ -1,0 +1,48 @@
+{
+  "variables": {
+    "role_name": {
+      "source": "save_meta.protagonist 或调用上下文",
+      "desc": "主角姓名"
+    },
+    "game_time": {
+      "source": "save_meta.game_time",
+      "desc": "当前游戏内时间字符串"
+    },
+    "tick_num": {
+      "source": "save_meta.tick_num",
+      "desc": "当前 tick 编号"
+    },
+    "era_name": {
+      "source": "save_meta.era_name",
+      "desc": "当前纪元名（如源石纪元）"
+    },
+    "script_name": {
+      "source": "save_meta.script_name",
+      "desc": "剧本名"
+    },
+    "scene_description": {
+      "source": "上下文：当前场景地图 + 角色位置",
+      "desc": "当前场景的描述（用于 actor_decide）"
+    },
+    "available_skills": {
+      "source": "ToolManager.list_skills()",
+      "desc": "当前可用 skill 列表（dev 调试用）"
+    },
+    "recent_events": {
+      "source": "events 表最近 N 条",
+      "desc": "最近事件摘要（context 用）"
+    },
+    "polish_length": {
+      "source": "全局配置 POLISH_LENGTH",
+      "desc": "润色文案长度档位（short/medium/long）"
+    },
+    "gore_enabled": {
+      "source": "全局配置 GORE_ENABLED",
+      "desc": "是否允许血腥描写（0/1）"
+    },
+    "adult_content_enabled": {
+      "source": "全局配置 ADULT_CONTENT_ENABLED",
+      "desc": "是否允许成人内容（0/1）"
+    }
+  }
+}

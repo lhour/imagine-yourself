@@ -1,0 +1,5 @@
+{
+  "default_version": "v0",
+  "name": "system_default",
+  "description": "默认系统提示词，当未指定具体提示词时使用"
+}

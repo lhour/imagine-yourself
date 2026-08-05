@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "name": "tool_result",
+  "description": "工具执行结果模板，变量 ${tool_name} 为工具名，${tool_result} 为执行结果",
+  "variables": ["tool_name", "tool_result"]
+}

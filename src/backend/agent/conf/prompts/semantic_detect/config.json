@@ -1,0 +1,5 @@
+{
+  "default_version": "v0",
+  "name": "semantic_detect",
+  "description": "语义分类：判断用户输入属于游戏动作、外部求助、游戏反馈还是未知"
+}

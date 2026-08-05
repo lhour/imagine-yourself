@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "行动纲领监控：检测纲领是否被冲突/阻碍",
+  "tools": ["character_agenda_filter", "character_agenda_bulk_update"],
+  "params": {}
+}

@@ -1,0 +1,5 @@
+{"name": "星核碎片（艾兰持有）", "desc_raw": "星塔核心脱落的时间结晶碎片，能够稳定半径五米内的时间流", "desc_polished": "它只有指甲盖大小，却比整个银城学派图书馆所有藏书加起来还要沉重。当你把它握在掌心，你会感受到一种奇妙的、像脉搏一样稳定的律动——那是大遗忘前，属于完整星塔的节拍。", "item_type": "artifact", "rarity": 5, "importance": 5, "holder_name": "艾兰·暮色", "quantity": 1, "acquired_tick": -1}
+{"name": "米蕾娅的眼罩", "desc_raw": "绣满星图的白色眼罩，米蕾娅的个人物品，实际上是一件可穿戴的被动时间稳定器", "desc_polished": "没有人知道，那块遮住米蕾娅右眼的白色眼罩，其实是星塔崩塌前最后一批量产的『时间稳定器』之一。它让她在每一次回忆过去时，不至于被遗忘之潮撕碎。", "item_type": "equipment", "rarity": 3, "importance": 3, "holder_name": "米蕾娅·观星者", "quantity": 1}
+{"name": "老卢卡的铜钟零件箱", "desc_raw": "修钟匠卢卡的工具箱，里面装满了各种时代的钟摆、齿轮和发条，包括一些星塔时代的部件", "item_type": "tool", "rarity": 2, "importance": 2, "holder_name": "老卢卡", "quantity": 1}
+{"name": "莉娜的赤铁短刀", "desc_raw": "灰烬会外勤执行者标配的赤铁短刀，刀身刻有『遗忘』二字的暗纹", "item_type": "weapon", "rarity": 2, "importance": 2, "holder_name": "莉娜·灰烬", "quantity": 1}
+{"name": "卡戎的空白记忆瓶", "desc_raw": "灰烬会特制的记忆抽取容器，可封存一段被指定遗忘的记忆，瓶身永远冰冷", "item_type": "container", "rarity": 4, "importance": 3, "holder_name": "卡戎·灰烬使者", "quantity": 3, "is_stackable": 1, "stack_size": 99}

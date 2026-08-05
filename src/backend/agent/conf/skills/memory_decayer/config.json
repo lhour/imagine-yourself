@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "记忆衰减：correctness 下降 + forget_prob 上升 + 偶发失真改写",
+  "tools": ["memory_decay", "memory_distort"],
+  "params": {}
+}

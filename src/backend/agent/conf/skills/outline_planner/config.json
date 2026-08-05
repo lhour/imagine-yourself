@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "任务大纲拆解：把任务拆为可执行步骤",
+  "tools": ["character_quest_filter", "quest_step_bulk_create", "quest_step_filter"],
+  "params": {}
+}

@@ -1,0 +1,5 @@
+{
+  "default_version": "v0",
+  "name": "game_feedback",
+  "description": "游戏反馈：以GM身份回应玩家对游戏设定的评价和建议"
+}

@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "name": "tool_use_instruction",
+  "description": "工具使用说明模板，变量 ${tools_list} 为可用工具列表",
+  "variables": ["tools_list"]
+}

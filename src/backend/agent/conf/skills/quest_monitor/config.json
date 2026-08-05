@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "任务监控：检测任务完成/失败/受阻",
+  "tools": ["character_quest_filter", "character_quest_bulk_update", "quest_step_filter", "quest_step_bulk_update"],
+  "params": {}
+}

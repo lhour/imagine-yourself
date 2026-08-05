@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "事件 → 每个参与人一条带视角偏差与失真概率的记忆编码",
+  "tools": ["memory_encode_event", "memory_palace"],
+  "params": {}
+}

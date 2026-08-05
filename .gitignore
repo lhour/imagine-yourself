@@ -1,0 +1,83 @@
+# ================ Python 缓存 ================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+*.eggs
+.eggs/
+build/
+dist/
+.eggs/
+*.whl
+
+# 虚拟环境
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# Pytest
+.pytest_cache/
+.cache/
+
+# ================ 环境变量 / 密钥 ================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ================ IDE / 编辑器 ================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# ================ TRAE 生成的中间文件 ================
+.trae/
+
+# ================ 日志 ================
+logs/
+!logs/.gitkeep
+backend/logs/
+*.log
+log/
+
+# ================ 数据库 / 存档 / 快照 ================
+saves/*.db
+saves/*.snapshots/
+*.db
+*.sqlite
+*.sqlite3
+saves/
+!saves/.gitkeep
+backend/saves/*.db
+backend/saves/*.snapshots/
+backend/saves/
+!backend/saves/.gitkeep
+
+# ================ Node.js / NPM ================
+node_modules/
+
+# ================ 临时文件 ================
+*.tmp
+*.temp
+_tmp_*.py
+__pycache/
+
+# ================ 操作系统 ================
+Thumbs.db
+.DS_Store
+Desktop.ini
+ehthumbs.db
+
+# ================ LLM 客户端缓存 ================
+*.cache
+cache/
