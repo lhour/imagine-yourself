@@ -33,11 +33,13 @@ def _classify_span(seconds: int) -> str:
     return "epochal"
 
 
-def time_jump(seconds: int) -> Dict[str, Any]:
+def time_jump(
+    seconds: int,
+) -> Dict[str, Any]:
     """时间跨越管线。
 
     1. 推进元信息（tick +1, game_time += seconds）
-    2. 调 time_skip_summarizer 生成史诗摘要 + 里程碑事件
+    2. 调 time_skip_summarizer 生成史诗摘要 + 里程碑事件（中间时段 + 目标时刻）
     3. 把里程碑事件写入 events 表
     4. 批量更新角色/物品/地图/群体的状态变更
     """
@@ -66,7 +68,8 @@ def time_jump(seconds: int) -> Dict[str, Any]:
             f"起点：{jump_result['from_time']}\n"
             f"终点：{jump_result['to_time']}\n"
             f"跨度秒数：{seconds}\n"
-            f"请生成史诗摘要 + 里程碑事件 + 状态变更。"
+            f"跨度类型：{span_type}\n"
+            f"请补全中间时段发生的事件（事件数量依跨度而定），并生成终点时刻的事件。"
         ),
         variables=variables,
         max_tokens=4096,

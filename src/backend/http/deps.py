@@ -35,6 +35,7 @@ DEFAULT_GLOBAL_CONFIG: Dict[str, Any] = {
         "max_events_per_tick": 20,
         "memory_decay_per_tick": 0.01,
         "heatmap_update_interval_ticks": 10,
+        "polish_mode": "none",
     },
     "memory": {
         "retrieve_max_default": 30,

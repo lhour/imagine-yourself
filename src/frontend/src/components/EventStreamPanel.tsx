@@ -259,12 +259,6 @@ export default function EventStreamPanel() {
     })();
   }, []);
 
-  const eventTypes = useMemo(() => {
-    const set = new Set<string>();
-    for (const e of events) if (e.event_type) set.add(e.event_type);
-    return Array.from(set).sort();
-  }, [events]);
-
   const allChars = useMemo(() => chars.sort((a, b) => b.importance - a.importance), [chars]);
   // char focus → multi-select chips
   const selectedCharIds = useMemo<Set<number>>(() => {
@@ -279,26 +273,8 @@ export default function EventStreamPanel() {
     setFilter({ charIds: idsStr || null });
   };
 
-  const selectedEventTypes = useMemo<Set<string>>(() => {
-    const raw = filter.eventTypes ?? '';
-    return new Set(raw ? raw.split(',').filter(Boolean) : []);
-  }, [filter.eventTypes]);
-  const toggleEventType = (t: string) => {
-    const next = new Set(selectedEventTypes);
-    if (next.has(t)) next.delete(t); else next.add(t);
-    setFilter({ eventTypes: Array.from(next).join(',') || null, eventType: '' });
-  };
-
-  useEffect(() => {
-    // 如果选了多选，就把旧的单选清掉；否则保持一致
-    if (selectedEventTypes.size > 0 && filter.eventType) setFilter({ eventType: '' });
-  }, [selectedEventTypes, filter.eventType, setFilter]);
-
   const filtered = useMemo(() => {
     let arr = events;
-    if (filter.eventType) arr = arr.filter((e) => e.event_type === filter.eventType);
-    if (selectedEventTypes.size > 0) arr = arr.filter((e) => selectedEventTypes.has(e.event_type));
-    if (filter.importanceMin > 0) arr = arr.filter((e) => (e.importance ?? 0) >= filter.importanceMin);
     if (selectedCharIds.size > 0) {
       arr = arr.filter((e) =>
         (e.participants ?? []).some(
@@ -307,60 +283,18 @@ export default function EventStreamPanel() {
       );
     }
     return arr;
-  }, [events, filter, selectedEventTypes, selectedCharIds]);
+  }, [events, selectedCharIds]);
 
   const tickGroups = useMemo(() => groupByTick(filtered), [filtered]);
   const tickKeys = Object.keys(tickGroups).map(Number).sort((a, b) => b - a);
-  const hasFilter =
-    filter.eventType !== '' ||
-    filter.importanceMin > 0 ||
-    selectedEventTypes.size > 0 ||
-    selectedCharIds.size > 0;
+  const hasFilter = selectedCharIds.size > 0;
 
-  const clearFilter = () => setFilter({ eventType: '', importanceMin: 0, eventTypes: null, charIds: null });
+  const clearFilter = () => setFilter({ charIds: null });
 
   return (
     <div className="event-panel">
       <div className="event-filter-bar">
         <span className="filter-label">筛选</span>
-
-        {eventTypes.length > 0 && (
-          <div className="filter-chips-wrap">
-            <span className="filter-sub">类型</span>
-            <div className="filter-chips">
-              {eventTypes.map((t) => (
-                <button
-                  key={t}
-                  className={clsx('chip chip-btn', selectedEventTypes.has(t) && 'chip-btn-on')}
-                  onClick={() => toggleEventType(t)}
-                >
-                  {typeLabel(t)}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <select
-          className="filter-select"
-          value={filter.eventType}
-          onChange={(e) => setFilter({ eventType: e.target.value, eventTypes: null })}
-        >
-          <option value="">（或下拉选一种）</option>
-          {eventTypes.map((t) => (
-            <option key={t} value={t}>{typeLabel(t)}</option>
-          ))}
-        </select>
-
-        <label className="filter-field">
-          重要性≥
-          <input
-            type="number"
-            min={0} max={5}
-            value={filter.importanceMin}
-            onChange={(e) => setFilter({ importanceMin: Math.max(0, Math.min(5, Number(e.target.value) || 0)) })}
-          />
-        </label>
 
         <label className="filter-field check">
           <input

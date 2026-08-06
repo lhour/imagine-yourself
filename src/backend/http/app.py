@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.backend.env import load_backend_env
 from src.backend.http.routers import (
-    agent, config, dramas, entities, groups, maps, memory, saves, world
+    agent, character_profiles, config, dramas, entities, groups, maps, memory, saves, world
 )
 
 load_backend_env()
@@ -31,6 +31,7 @@ def create_app() -> FastAPI:
     app.include_router(config.router)
     app.include_router(saves.router)
     app.include_router(entities.router)
+    app.include_router(character_profiles.router)
     app.include_router(memory.router)
     app.include_router(maps.router)
     app.include_router(groups.router)

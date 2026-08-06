@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import AdminNav from '../components/AdminNav';
 import { useGameStore } from '../store/gameStore';
-import { dramasApi } from '../api/client';
+import { dramasApi, configApi } from '../api/client';
 
 interface DramaItem {
   name: string;

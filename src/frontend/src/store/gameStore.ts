@@ -43,6 +43,24 @@ export const TIME_JUMP_PRESETS: Record<string, { seconds: number; label: string;
 
 export type RightPanelTab = 'characters' | 'groups' | 'items' | 'maps' | 'memory';
 
+// 底部「下一 Tick」单位预设：单位 → 秒数倍率 + 可选项
+export const TICK_UNITS: Record<'second' | 'minute' | 'hour', { factor: number; label: string; options: number[] }> = {
+  second: { factor: 1, label: '秒', options: [10, 20, 30, 40, 50] },
+  minute: { factor: 60, label: '分', options: [1, 5, 10, 20, 30, 50] },
+  hour:   { factor: 3600, label: '时', options: [1, 2, 3, 4, 5, 6, 12] },
+};
+
+// 底部「时间跨越」单位 → 秒数倍率
+export const JUMP_UNITS: { key: string; label: string; factor: number; options: number[] }[] = [
+  { key: 'day',     label: '天',   factor: 86400, options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+  { key: 'month',   label: '月',   factor: 86400 * 30, options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+  { key: 'year',    label: '年',   factor: 86400 * 365, options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+  { key: 'century', label: '百年', factor: 86400 * 365 * 100, options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+  { key: 'millennium', label: '千年', factor: 86400 * 365 * 1000, options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+  { key: 'myriayear', label: '万年', factor: 86400 * 365 * 10000, options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+  { key: 'era',     label: '纪元', factor: 86400 * 365 * 100000, options: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+];
+
 interface GameState {
   // 存档
   saves: string[];
@@ -102,8 +120,9 @@ interface GameState {
   setAutoSpeed: (speed: AutoSpeed) => void;
   startAutoTick: () => void;
   stopAutoTick: () => void;
-  runTickOnce: (seconds: number) => Promise<void>;
+  runTickOnce: (seconds: number, playerAction?: string) => Promise<void>;
   runTimeJump: (seconds: number) => Promise<void>;
+  runAdvance: (seconds: number, opts?: { player_action?: string }) => Promise<void>;
 
   setRightTab: (tab: RightPanelTab) => void;
   setEventsFilter: (filter: Partial<GameState['eventsFilter']>) => void;
@@ -296,11 +315,11 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
   },
 
-  runTickOnce: async (seconds) => {
+  runTickOnce: async (seconds, playerAction) => {
     if (get().isProcessing) return;
     set({ isProcessing: true });
     try {
-      const result = await agentApi.tick(seconds, 5);
+      const result = await agentApi.tick(seconds, 5, playerAction);
       set({ lastTickResult: result });
       await get().refreshMeta();
       await get().refreshEvents();
@@ -327,6 +346,26 @@ export const useGameStore = create<GameState>((set, get) => ({
       set({ notification: `时间跨越：${result.span_label}` });
     } catch (e) {
       set({ error: `时间跨越失败：${(e as Error).message}` });
+    } finally {
+      set({ isProcessing: false });
+    }
+  },
+
+  runAdvance: async (seconds, opts) => {
+    if (get().isProcessing) return;
+    set({ isProcessing: true });
+    try {
+      const result = await agentApi.advance(seconds, opts);
+      set({ lastTimeJumpResult: result });
+      await get().refreshMeta();
+      await get().refreshEvents();
+      await get().refreshCharacters();
+      await get().refreshGroups();
+      const mode = result.advance_mode === 'tick' ? '推进' : '跨越';
+      const usedSeconds = result.seconds ?? seconds;
+      set({ notification: `时间${mode}完成（${usedSeconds} 秒）` });
+    } catch (e) {
+      set({ error: `时间推进失败：${(e as Error).message}` });
     } finally {
       set({ isProcessing: false });
     }

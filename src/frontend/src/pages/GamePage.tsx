@@ -11,41 +11,27 @@ import '../styles/GamePage.css';
 type BottomSubTab = 'player' | 'quest';
 
 export default function GamePage() {
-  const [leftOpen, setLeftOpen] = useState(true);
-  const [rightOpen, setRightOpen] = useState(true);
   const [bottomSub, setBottomSub] = useState<BottomSubTab>('player');
 
   return (
     <div className="game-page">
-      <div className="gp-topbar">
+      <div className="topbar">
         <TopBar />
       </div>
 
-      <button
-        className={`gp-collapse gp-collapse-l ${leftOpen ? 'open' : 'closed'}`}
-        onClick={() => setLeftOpen((v) => !v)}
-        title={leftOpen ? '收起左栏' : '展开左栏'}
-      >{leftOpen ? '◀' : '▶'}</button>
-
-      <div className={`gp-left ${leftOpen ? '' : 'gp-collapsed'}`}>
+      <div className="left">
         <LeftPanel />
       </div>
 
-      <div className="gp-main">
+      <div className="main">
         <EventStreamPanel />
       </div>
 
-      <button
-        className={`gp-collapse gp-collapse-r ${rightOpen ? 'open' : 'closed'}`}
-        onClick={() => setRightOpen((v) => !v)}
-        title={rightOpen ? '收起右栏' : '展开右栏'}
-      >{rightOpen ? '▶' : '◀'}</button>
-
-      <div className={`gp-right ${rightOpen ? '' : 'gp-collapsed'}`}>
+      <div className="right">
         <RightPanel />
       </div>
 
-      <div className="gp-bottom">
+      <div className="bottom">
         <div className="gp-bottom-tabs">
           <button
             className={`gp-tab ${bottomSub === 'player' ? 'on' : ''}`}

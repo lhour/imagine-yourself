@@ -32,17 +32,9 @@
       "source": "events 表最近 N 条",
       "desc": "最近事件摘要（context 用）"
     },
-    "polish_length": {
-      "source": "全局配置 POLISH_LENGTH",
-      "desc": "润色文案长度档位（short/medium/long）"
-    },
-    "gore_enabled": {
-      "source": "全局配置 GORE_ENABLED",
-      "desc": "是否允许血腥描写（0/1）"
-    },
-    "adult_content_enabled": {
-      "source": "全局配置 ADULT_CONTENT_ENABLED",
-      "desc": "是否允许成人内容（0/1）"
+    "polish_mode": {
+      "source": "全局配置 simulation.polish_mode",
+      "desc": "润色档位（none/short/long）"
     }
   }
 }

@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "玩家瞬间动作：把玩家输入的动作转化为主角本 tick 的合理行动与影响推演",
+  "tools": ["memory_retrieve", "memory_palace", "character_quest_filter", "character_agenda_filter", "character_location_filter", "map_distance", "map_features"],
+  "params": {}
+}

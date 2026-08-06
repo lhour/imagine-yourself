@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "润色风格选择器：根据事件原文判断最适合的润色风格",
+  "tools": [],
+  "params": {}
+}

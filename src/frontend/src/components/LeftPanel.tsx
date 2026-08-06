@@ -11,11 +11,10 @@ function snapshotName(s: unknown): string {
   return ((s as SnapshotItem | null)?.name) ?? String(s ?? '');
 }
 
-const POLISH_LEN_OPTS = [
-  { v: 'short', label: '短（1句）' },
-  { v: 'medium', label: '中（3~5句）' },
-  { v: 'long', label: '长（段落）' },
-  { v: 'epic', label: '史诗（多段）' },
+const POLISH_MODE_OPTS = [
+  { v: 'none', label: '无润色' },
+  { v: 'short', label: '短润色' },
+  { v: 'long', label: '长润色' },
 ] as const;
 
 export default function LeftPanel() {
@@ -31,10 +30,7 @@ export default function LeftPanel() {
   const [metaDraft, setMetaDraft] = useState({ tick_num: 0, game_time: '', era_name: '' });
   const [snapshots, setSnapshots] = useState<string[]>([]);
   const [cfg, setCfg] = useState<{
-    polish_length?: string;
-    gore_enabled?: boolean;
-    adult_content?: boolean;
-    violence_level?: number;
+    polish_mode?: string;
   }>({});
 
   const loadSnapshots = async () => {
@@ -51,10 +47,7 @@ export default function LeftPanel() {
     try {
       const c = await configApi.get();
       setCfg({
-        polish_length: c.ui?.default_polish_length ?? c.simulation?.polish_length ?? 'medium',
-        gore_enabled: c.simulation?.gore_enabled ?? false,
-        adult_content: c.simulation?.adult_content ?? false,
-        violence_level: c.simulation?.violence_level ?? 2,
+        polish_mode: c.simulation?.polish_mode ?? 'none',
       });
     } catch { /* ignore */ }
   };
@@ -71,10 +64,7 @@ export default function LeftPanel() {
   const patchCfg = async (patch: Record<string, unknown>) => {
     try {
       const simulation = {
-        gore_enabled: cfg.gore_enabled,
-        adult_content: cfg.adult_content,
-        violence_level: cfg.violence_level,
-        polish_length: cfg.polish_length,
+        polish_mode: cfg.polish_mode,
         ...patch,
       };
       await configApi.patch({ simulation });
@@ -185,46 +175,15 @@ export default function LeftPanel() {
           <span>内容偏好</span>
         </div>
         <div className="field-row field-col">
-          <label>润色长度</label>
+          <label>润色</label>
           <select
-            value={cfg.polish_length ?? 'medium'}
-            onChange={(e) => void patchCfg({ polish_length: e.target.value })}
+            value={cfg.polish_mode ?? 'none'}
+            onChange={(e) => void patchCfg({ polish_mode: e.target.value })}
           >
-            {POLISH_LEN_OPTS.map((o) => (
+            {POLISH_MODE_OPTS.map((o) => (
               <option key={o.v} value={o.v}>{o.label}</option>
             ))}
           </select>
-        </div>
-        <div className="field-row">
-          <label>血腥描写</label>
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={!!cfg.gore_enabled}
-              onChange={(e) => void patchCfg({ gore_enabled: e.target.checked })}
-            />
-            <span className="slider" />
-          </label>
-        </div>
-        <div className="field-row">
-          <label>成人内容</label>
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={!!cfg.adult_content}
-              onChange={(e) => void patchCfg({ adult_content: e.target.checked })}
-            />
-            <span className="slider" />
-          </label>
-        </div>
-        <div className="field-row field-col">
-          <label>暴力等级 {cfg.violence_level ?? 2}/5</label>
-          <input
-            type="range"
-            min={0} max={5} step={1}
-            value={cfg.violence_level ?? 2}
-            onChange={(e) => void patchCfg({ violence_level: Number(e.target.value) })}
-          />
         </div>
       </div>
 

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.backend.http.deps import require_active_save
-from src.backend.agent import pipeline, time_jump_pipeline
+from src.backend.agent import advance_pipeline, pipeline, time_jump_pipeline
 from src.backend.agent.skill.loader import (
     list_skills, get_skill, render_skill,
     list_skill_versions, get_skill_version_detail,
@@ -79,6 +79,12 @@ def test_connection(req: TestConnectionReq, sm=Depends(require_active_save)):
 class TickReq(BaseModel):
     seconds: int = 60
     max_actors: int = 5
+    player_action: Optional[str] = None
+
+
+class AdvanceReq(BaseModel):
+    seconds: int
+    player_action: Optional[str] = None
 
 
 class TimeJumpReq(BaseModel):
@@ -132,7 +138,19 @@ class SetActiveReq(BaseModel):
 def run_tick(req: TickReq, sm=Depends(require_active_save)):
     """执行完整 tick 管线（7 步）。"""
     try:
-        return pipeline.tick_once(req.seconds, req.max_actors)
+        return pipeline.tick_once(req.seconds, req.max_actors, req.player_action)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/advance")
+def run_advance(req: AdvanceReq, sm=Depends(require_active_save)):
+    """统一时间推进：按跨度自动选择 tick 或 time_jump 编排剧情。"""
+    try:
+        return advance_pipeline.advance(
+            req.seconds,
+            player_action=req.player_action,
+        )
     except RuntimeError as e:
         raise HTTPException(400, str(e))
 

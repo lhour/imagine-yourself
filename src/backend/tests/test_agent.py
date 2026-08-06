@@ -89,11 +89,16 @@ def test_list_skills_endpoint(client, save_with_data):
     r = client.get("/api/agent/skills")
     assert r.status_code == 200
     data = r.json()
-    assert data["count"] == 11
+    assert data["count"] >= 20
     names = [s["name"] for s in data["items"]]
     assert "actor_decide" in names
     assert "time_skip_summarizer" in names
     assert "memory_encoder" in names
+    assert "player_action" in names
+    # 润色已重构为独立 skill：风格选择 + 各风格 polisher
+    assert "polish_style_selector" in names
+    assert "polisher_default" in names
+    assert "polisher_poetic" in names
 
 
 def test_get_skill_version(client, save_with_data):
@@ -137,7 +142,7 @@ def test_get_variables(client, save_with_data):
     vars = r.json()["variables"]
     assert "role_name" in vars
     assert "game_time" in vars
-    assert "polish_length" in vars
+    assert "polish_mode" in vars
 
 
 # ============================================================
@@ -179,13 +184,13 @@ def test_time_jump_pipeline_mock(client, save_with_data):
 def test_call_skill_endpoint(client, save_with_data):
     """直接调 skill。"""
     client.post(f"/api/saves/{save_with_data}/switch")
-    r = client.post("/api/agent/skills/event_polisher/call", json={
-        "skill_name": "event_polisher",
+    r = client.post("/api/agent/skills/polisher_default/call", json={
+        "skill_name": "polisher_default",
         "user_prompt": "事件 raw：小红亲了小明\n请润色。",
     })
     assert r.status_code == 200
     data = r.json()
-    assert data["skill"] == "event_polisher"
+    assert data["skill"] == "polisher_default"
     assert data["mock"] is True
     assert data["content"]  # 应有 mock 返回
 
@@ -226,15 +231,15 @@ def test_get_skill_version_not_found(client, save_with_data):
 
 
 def test_create_update_setactive_skill_version(client, save_with_data):
-    """端到端：创建 v1 → 更新内容 → 设为激活 → 验证 → 清理。"""
+    """端到端（文件存储）：创建 v1 → 更新内容 → 设为激活 → 验证 → 清理。"""
     client.post(f"/api/saves/{save_with_data}/switch")
-    name = "event_polisher"
+    name = "actor_decide"
     v1_dir = SKILLS_DIR / name / "v1"
     config_path = SKILLS_DIR / name / "config.json"
 
     # 记录原始 default_version 以便恢复（utf-8-sig 兼容 BOM）
     orig_default = json.loads(config_path.read_text(encoding="utf-8-sig"))["default_version"]
-    orig_content = config_path.read_bytes()  # 保留原始字节以便完全恢复
+    orig_content = config_path.read_bytes()
 
     try:
         # 1. 创建 v1（从 v0 copytree）
@@ -293,7 +298,6 @@ def test_create_update_setactive_skill_version(client, save_with_data):
         _clear_skill_cache(name)
         if v1_dir.is_dir():
             shutil.rmtree(v1_dir, ignore_errors=True)
-        # 用原始字节恢复，确保不引入 BOM 等编码差异
         config_path.write_bytes(orig_content)
         _clear_skill_cache(name)
 

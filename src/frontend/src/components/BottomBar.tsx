@@ -1,141 +1,107 @@
-// 底部时间控制条 + 玩家动作输入
-// 对应 spec：Auto 模式（自动 tick）/ Jump 模式（时间跨越）/ ActionRow（玩家行动）
+// 底部时间控制条
+//   第 1 行：快速推进预设（10秒/1分/5分/10分/30分/1小时）
+//   第 2 行：自定义跨度（年/月/日/时/分/秒）
+//   第 3 行：瞬间动作输入 + 发送
 import { useState } from 'react';
-import { useGameStore, AUTO_SPEED_PRESETS, TIME_JUMP_PRESETS, AutoSpeed } from '../store/gameStore';
-import { worldApi } from '../api/client';
+import { useGameStore } from '../store/gameStore';
 
-const SPEED_KEYS: AutoSpeed[] = ['10s', '1m', '5m', '30m', '1h', '4h', '1d'];
-const JUMP_KEYS = ['3d', '7d', '30d', '100d', '1y', '3y', '10y', '100y', '1000y'];
+const FAST_PRESETS = [
+  { label: '10秒', seconds: 10 },
+  { label: '1分', seconds: 60 },
+  { label: '5分', seconds: 300 },
+  { label: '10分', seconds: 600 },
+  { label: '30分', seconds: 1800 },
+  { label: '1小时', seconds: 3600 },
+];
 
-const QUICK_ACTIONS = ['观察四周', '前往', '询问', '休息', '战斗', '搜查'];
+const SPAN_FIELDS: { key: 'y' | 'mo' | 'd' | 'h' | 'mi' | 's'; label: string; unit: number }[] = [
+  { key: 'y', label: '年', unit: 365 * 86400 },
+  { key: 'mo', label: '月', unit: 30 * 86400 },
+  { key: 'd', label: '日', unit: 86400 },
+  { key: 'h', label: '时', unit: 3600 },
+  { key: 'mi', label: '分', unit: 60 },
+  { key: 's', label: '秒', unit: 1 },
+];
 
 export default function BottomBar() {
-  const timeMode = useGameStore((s) => s.timeMode);
-  const autoSpeed = useGameStore((s) => s.autoSpeed);
   const isProcessing = useGameStore((s) => s.isProcessing);
-  const meta = useGameStore((s) => s.meta);
-  const setTimeMode = useGameStore((s) => s.setTimeMode);
-  const setAutoSpeed = useGameStore((s) => s.setAutoSpeed);
-  const startAutoTick = useGameStore((s) => s.startAutoTick);
-  const stopAutoTick = useGameStore((s) => s.stopAutoTick);
-  const runTickOnce = useGameStore((s) => s.runTickOnce);
-  const runTimeJump = useGameStore((s) => s.runTimeJump);
-  const setNotification = useGameStore((s) => s.setNotification);
+  const runAdvance = useGameStore((s) => s.runAdvance);
   const setError = useGameStore((s) => s.setError);
 
+  // 自定义跨度
+  const [span, setSpan] = useState<Record<string, number>>({ y: 0, mo: 0, d: 0, h: 0, mi: 0, s: 0 });
+  // 瞬间动作
   const [actionText, setActionText] = useState('');
 
-  const handleAutoToggle = () => {
-    if (timeMode === 'auto') {
-      stopAutoTick();
-      setTimeMode('paused');
-    } else {
-      startAutoTick();
+  const spanSeconds = SPAN_FIELDS.reduce((acc, f) => acc + (span[f.key] || 0) * f.unit, 0);
+
+  const doAdvance = (seconds: number) => {
+    if (seconds <= 0) {
+      setError('推进秒数必须大于 0');
+      return;
     }
+    runAdvance(seconds);
   };
 
-  const handleTick = () => {
-    runTickOnce(60);
-  };
-
-  const handleJump = (key: string) => {
-    const preset = TIME_JUMP_PRESETS[key];
-    if (!preset) return;
-    if (!confirm(`${preset.confirm}？时间跨越会跳过中间过程并生成摘要。`)) return;
-    runTimeJump(preset.seconds);
-  };
-
-  const submitAction = async () => {
+  const submitAction = () => {
     const text = actionText.trim();
     if (!text) return;
-    try {
-      // 玩家行动作为一条 player_action 事件写入客观层
-      await worldApi.createEvent({
-        tick_num: meta?.tick_num ?? 0,
-        game_time: meta?.game_time ?? '',
-        event_type: 'player_action',
-        content_raw: text,
-        importance: 3,
-      });
-      setActionText('');
-      setNotification('玩家行动已记录，正在推进 LLM 管线…');
-      // 推进一个 tick，触发 agent 管线（NPC 决策 / 世界反应 / 事件润色）
-      await runTickOnce(60);
-    } catch (e) {
-      setError(`提交行动失败：${(e as Error).message}`);
-    }
+    // 由模型判断动作的最短执行时长作为推进跨度
+    runAdvance(0, { player_action: text });
+    setActionText('');
   };
 
   return (
     <div className="bottom-bar">
-      <div className="time-control-bar">
-        <span className="bar-label">时间控制</span>
-
-        <div className="mode-toggle">
-          <button
-            className={`mode-btn ${timeMode === 'auto' ? 'active' : ''}`}
-            onClick={handleAutoToggle}
-            disabled={isProcessing}
-            title="自动按间隔推进 tick"
-          >
-            ▶ 自动
-          </button>
-          <button
-            className={`mode-btn ${timeMode === 'paused' ? 'active' : ''}`}
-            onClick={() => { stopAutoTick(); setTimeMode('paused'); }}
-            disabled={isProcessing}
-            title="暂停自动推进"
-          >
-            ⏸ 暂停
-          </button>
-        </div>
-
-        <button
-          className="mode-btn tick-btn"
-          onClick={handleTick}
-          disabled={isProcessing}
-          title="手动推进一个 tick（60 秒）"
-        >
-          {isProcessing ? <span className="spinner" /> : '⏭ 下一 Tick'}
-        </button>
-
-        {timeMode === 'auto' && (
-          <div className="speed-btn-group">
-            {SPEED_KEYS.map((k) => (
-              <button
-                key={k}
-                className={`speed-btn ${autoSpeed === k ? 'active' : ''}`}
-                onClick={() => setAutoSpeed(k)}
-                title={AUTO_SPEED_PRESETS[k].label}
-              >
-                {k}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <span className="bar-divider" />
-
-        <span className="bar-label">时间跨越</span>
-        <div className="jump-btn-group">
-          {JUMP_KEYS.map((k) => (
+      {/* 第 1 行：快速推进 */}
+      <div className="ctl-row">
+        <span className="bar-label">推进</span>
+        <div className="unit-group">
+          {FAST_PRESETS.map((p) => (
             <button
-              key={k}
-              className="jump-btn"
-              onClick={() => handleJump(k)}
+              key={p.label}
+              className="unit-btn"
               disabled={isProcessing}
-              title={TIME_JUMP_PRESETS[k].confirm}
+              onClick={() => doAdvance(p.seconds)}
             >
-              {TIME_JUMP_PRESETS[k].label}
+              {p.label}
             </button>
           ))}
         </div>
       </div>
 
-      <div className="action-row">
-        <textarea
+      {/* 第 2 行：自定义跨度 */}
+      <div className="ctl-row">
+        <span className="bar-label">跨度</span>
+        <div className="span-fields">
+          {SPAN_FIELDS.map((f) => (
+            <label key={f.key} className="span-field">
+              <input
+                type="number"
+                min={0}
+                value={span[f.key] ?? 0}
+                onChange={(e) => setSpan({ ...span, [f.key]: Math.max(0, Number(e.target.value) || 0) })}
+                disabled={isProcessing}
+              />
+              <span>{f.label}</span>
+            </label>
+          ))}
+        </div>
+        <button
+          className="submit-btn"
+          disabled={isProcessing || spanSeconds <= 0}
+          onClick={() => doAdvance(spanSeconds)}
+        >
+          推进 {spanSeconds} 秒
+        </button>
+      </div>
+
+      {/* 第 3 行：瞬间动作 */}
+      <div className="ctl-row">
+        <span className="bar-label">动作</span>
+        <input
           className="action-input"
-          placeholder="输入玩家行动（如：前往酒馆 / 询问守卫 / 攻击哥布林）…"
+          placeholder="输入瞬间动作（由模型判断执行时长并推演）…"
           value={actionText}
           onChange={(e) => setActionText(e.target.value)}
           onKeyDown={(e) => {
@@ -146,19 +112,8 @@ export default function BottomBar() {
           }}
           disabled={isProcessing}
         />
-        <div className="quick-actions">
-          {QUICK_ACTIONS.map((q) => (
-            <span
-              key={q}
-              className="quick-action-chip"
-              onClick={() => setActionText((t) => (t ? `${t} ${q}` : q))}
-            >
-              {q}
-            </span>
-          ))}
-        </div>
         <button className="submit-btn" onClick={submitAction} disabled={isProcessing || !actionText.trim()}>
-          提交行动
+          {isProcessing ? <span className="spinner" /> : '发送'}
         </button>
       </div>
     </div>

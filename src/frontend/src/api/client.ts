@@ -7,6 +7,10 @@ export const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+// 重型 LLM 管线（tick / 时间跨越）耗时远超普通请求，
+// 单独放宽超时，避免 30s 默认超时导致 net::ERR_ABORTED。
+const LLM_TIMEOUT = 600000; // 10 分钟
+
 // ============================================================
 // 存档管理
 // ============================================================
@@ -49,6 +53,9 @@ export const entitiesApi = {
     api.delete(`/entities/${slug}/${id}`).then((r) => r.data),
   slugs: () =>
     api.get<{ slugs: string[]; count: number }>('/entities/_slugs').then((r) => r.data),
+  // 角色完整档案
+  characterProfile: (charId: number) =>
+    api.get(`/characters/${charId}/profile`).then((r) => r.data),
 };
 
 // ============================================================
@@ -125,10 +132,13 @@ export const groupsApi = {
 
 export const agentApi = {
   // 管线
-  tick: (seconds: number = 60, maxActors: number = 5) =>
-    api.post('/agent/tick', { seconds, max_actors: maxActors }).then((r) => r.data),
+  tick: (seconds: number = 60, maxActors: number = 5, playerAction?: string) =>
+    api.post('/agent/tick', { seconds, max_actors: maxActors, player_action: playerAction }, { timeout: LLM_TIMEOUT }).then((r) => r.data),
   timeJump: (seconds: number) =>
-    api.post('/agent/time_jump', { seconds }).then((r) => r.data),
+    api.post('/agent/time_jump', { seconds }, { timeout: LLM_TIMEOUT }).then((r) => r.data),
+  // 统一时间推进：按跨度自动选择 tick/time_jump
+  advance: (seconds: number, opts?: { player_action?: string }) =>
+    api.post('/agent/advance', { seconds, player_action: opts?.player_action }, { timeout: LLM_TIMEOUT }).then((r) => r.data),
   callSkill: (name: string, body: Record<string, unknown>) =>
     api.post(`/agent/skills/${name}/call`, body).then((r) => r.data),
   testConnection: (body?: {

@@ -1341,7 +1341,7 @@ button, input, select, textarea {
 .game-page > .left   { grid-area: left;   min-height: 0; overflow: hidden; }
 .game-page > .main   { grid-area: main;   min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 .game-page > .right  { grid-area: right;  min-height: 0; overflow: hidden; }
-.game-page > .bottom { grid-area: bottom; min-height: 0; overflow: hidden; }
+.game-page > .bottom { grid-area: bottom; min-height: 0; min-width: 0; overflow: hidden; border-top: 1px solid var(--border); background: var(--bg-panel); display: flex; flex-direction: column; }
 
 /* ---------- 顶栏 ---------- */
 .topbar {
@@ -2091,6 +2091,131 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent-blue); ou
 .action-row { padding: 8px 14px; }
 .time-control-bar .mode-btn { padding: 5px 12px; }
 .time-control-bar .jump-btn, .time-control-bar .speed-btn { padding: 4px 8px; }
+
+/* ============================================================
+   底部 3 行控制条（下一 Tick / 时间跨越 / 瞬间动作）
+   ============================================================ */
+.bottom-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 10px;
+}
+.ctl-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.bar-label {
+  font-size: 12px;
+  color: #8b93a7;
+  white-space: nowrap;
+  min-width: 56px;
+}
+.unit-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.unit-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.unit-btn {
+  padding: 4px 12px;
+  border: 1px solid #2c3446;
+  border-radius: 6px;
+  background: #1a2230;
+  color: #cbd2e0;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all .15s;
+}
+.unit-btn:hover { border-color: var(--accent, #6d9bf3); color: #fff; }
+.unit-btn.active { border-color: var(--accent, #6d9bf3); background: #24304a; color: #fff; }
+.unit-options {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 6px;
+  background: #141a26;
+  border: 1px solid #2c3446;
+  border-radius: 8px;
+  box-shadow: 0 6px 16px rgba(0,0,0,.4);
+  min-width: 120px;
+}
+.opt-btn {
+  padding: 3px 8px;
+  border: 1px solid #2c3446;
+  border-radius: 5px;
+  background: #1a2230;
+  color: #cbd2e0;
+  cursor: pointer;
+  font-size: 12px;
+}
+.opt-btn:hover { border-color: var(--accent, #6d9bf3); color: #fff; }
+.opt-btn.active { border-color: var(--accent, #6d9bf3); background: #24304a; color: #fff; }
+.tick-summary {
+  font-size: 12px;
+  color: #8b93a7;
+  white-space: nowrap;
+}
+.ctl-row .action-input {
+  flex: 1;
+  min-width: 240px;
+  padding: 6px 10px;
+  border: 1px solid #2c3446;
+  border-radius: 6px;
+  background: #0f1521;
+  color: #e6eaf2;
+  font-size: 13px;
+}
+.ctl-row .action-input:focus { border-color: var(--accent, #6d9bf3); outline: none; }
+.ctl-row .submit-btn {
+  padding: 6px 18px;
+  border: none;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #7ea9f5 0%, #6d9bf3 100%);
+  color: #0b1220;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ctl-row .submit-btn:hover:not(:disabled) { filter: brightness(1.05); }
+.ctl-row .submit-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* 自定义跨度输入 */
+.span-fields {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.span-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  color: #8b93a7;
+}
+.span-field input {
+  width: 52px;
+  padding: 4px 6px;
+  border: 1px solid #2c3446;
+  border-radius: 5px;
+  background: #0f1521;
+  color: #e6eaf2;
+  font-size: 12px;
+  text-align: center;
+}
+.span-field input:focus { border-color: var(--accent, #6d9bf3); outline: none; }
+.ctl-row .action-input.to-time { flex: 1.2; min-width: 260px; }
+.ctl-row .action-input.target-note { flex: 1.4; min-width: 260px; }
 
 /* 更明显、更易拖动的滚动条 */
 ::-webkit-scrollbar { width: 12px; height: 12px; }

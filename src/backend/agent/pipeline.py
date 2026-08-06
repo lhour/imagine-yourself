@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Dict, List, Optional
 
 from src.backend import deepseek_client
@@ -36,15 +35,16 @@ def _build_variables() -> Dict[str, Any]:
     if not sm.active_save:
         return {}
     meta = sm.get_meta()
+    # 从全局配置读取润色偏好（与 UI 一致），而非环境变量
+    from src.backend.http.deps import get_global_config
+    sim = get_global_config().get("simulation", {})
     return {
         "tick_num": meta.get("tick_num", 0),
         "game_time": meta.get("game_time", ""),
         "era_name": meta.get("era_name", ""),
         "script_name": meta.get("script_name", ""),
         "role_name": (sm.get_protagonist() or {}).get("name", ""),
-        "polish_length": os.environ.get("POLISH_LENGTH", "medium"),
-        "gore_enabled": os.environ.get("GORE_ENABLED", "0"),
-        "adult_content_enabled": os.environ.get("ADULT_CONTENT_ENABLED", "0"),
+        "polish_mode": sim.get("polish_mode", "none"),
     }
 
 
@@ -128,17 +128,55 @@ def call_skill(
 
 
 # ============================================================
+# 润色风格选择（每个风格独立成一个 polisher_<style> skill）
+# ============================================================
+
+_POLISH_STYLES = {
+    "default", "poetic", "grimdark", "warm", "epic",
+    "humorous", "concise", "horror", "classical", "cyberpunk",
+}
+
+
+def _select_polish_style(content: str) -> str:
+    """由模型判断当前文案最适合的润色风格 key。"""
+    try:
+        r = call_skill(
+            "polish_style_selector",
+            user_prompt=f"事件原文：\n{content}",
+            temperature=0.2,
+            max_tokens=64,
+        )
+        parsed = r.get("parsed")
+        if isinstance(parsed, dict):
+            s = str(parsed.get("style", "")).strip()
+            if s:
+                return s
+    except Exception:
+        pass
+    return "default"
+
+
+def _polisher_for_style(style: str) -> str:
+    """把风格 key 映射到对应 polisher skill 名。"""
+    s = (style or "default").strip()
+    if s not in _POLISH_STYLES:
+        s = "default"
+    return f"polisher_{s}"
+
+
+# ============================================================
 # 正常 tick 管线（7 步）
 # ============================================================
 
-def tick_once(seconds: int = 60, max_actors: int = 5) -> Dict[str, Any]:
+def tick_once(seconds: int = 60, max_actors: int = 5, player_action: Optional[str] = None) -> Dict[str, Any]:
     """推进 1 tick 的完整管线。
 
     步骤：
     1. 元信息推进（tick +1, game_time += seconds）
+    1.5 玩家瞬间动作注入（可选）
     2. 记忆衰减（对所有有记忆的角色）
     3. 任务/纲领监控
-    4. NPC 决策（对 max_actors 个活跃角色）
+    4. NPC 决策（对 max_actors 个活跃角色；主角用 player_action skill）
     5. 世界反应合成事件
     6. 事件编码为记忆
     7. 事件润色
@@ -155,6 +193,17 @@ def tick_once(seconds: int = 60, max_actors: int = 5) -> Dict[str, Any]:
     # ---- Step 1: 推进元信息 ----
     meta = world_service.tick_once(seconds)
     trace.append({"step": 1, "name": "advance_tick", "meta": meta})
+
+    # ---- Step 1.5: 玩家瞬间动作注入（可选）----
+    player_event_id: Optional[int] = None
+    if player_action and player_action.strip():
+        pe = world_service.create_event(
+            event_type="player_action",
+            content_raw=player_action.strip(),
+            importance=5,
+        )
+        player_event_id = pe["id"]
+        trace.append({"step": 1.5, "name": "player_action", "event_id": player_event_id, "text": player_action.strip()})
 
     # ---- Step 2: 记忆衰减 ----
     # 取所有有记忆的角色
@@ -182,14 +231,28 @@ def tick_once(seconds: int = 60, max_actors: int = 5) -> Dict[str, Any]:
     active_chars = models.Character.list(
         where="dead_at_tick IS NULL", order_by="importance DESC", limit=max_actors
     )
+    proto = sm.get_protagonist()
+    proto_id = proto.get("id") if proto else None
     decisions: List[Dict[str, Any]] = []
     for c in active_chars:
         scene_vars = {**variables, "role_name": c.name, "scene_description": c.status or "正常"}
-        decision = call_skill(
-            "actor_decide",
-            user_prompt=f"角色：{c.name}\n状态：{c.status or '正常'}\n请决策本 tick 行动。",
-            variables=scene_vars,
-        )
+        if player_action and c.id == proto_id:
+            # 主角：用 player_action skill 把玩家瞬间动作转化为决策
+            decision = call_skill(
+                "player_action",
+                user_prompt=(
+                    f"角色：{c.name}\n状态：{c.status or '正常'}\n"
+                    f"玩家瞬间动作：{player_action}\n"
+                    f"请基于该动作推演本 tick 主角的行动与影响。"
+                ),
+                variables=scene_vars,
+            )
+        else:
+            decision = call_skill(
+                "actor_decide",
+                user_prompt=f"角色：{c.name}\n状态：{c.status or '正常'}\n请决策本 tick 行动。",
+                variables=scene_vars,
+            )
         decisions.append({"char_id": c.id, "char_name": c.name, "decision": decision.get("parsed") or decision.get("content")})
     trace.append({"step": 4, "name": "actor_decide", "actors": len(decisions), "decisions": decisions})
 
@@ -245,40 +308,55 @@ def tick_once(seconds: int = 60, max_actors: int = 5) -> Dict[str, Any]:
             pass
     trace.append({"step": 6, "name": "memory_encode", "encoded": encoded_total})
 
-    # ---- Step 7: 事件润色 ----
-    # 大部分情况下，LLM 在 step 5 通过 world_create_event 工具创建事件时
-    # 已经传入了 content_polished 字段，这里只对未润色的事件做兜底。
+    # ---- Step 7: 事件润色（独立节点，受 polish_mode 控制，与主管线解耦）----
+    polish_mode = variables.get("polish_mode", "none")
     polished = 0
-    for eid in events_created:
-        ev = models.Event.get(eid)
-        if ev and not ev.content_polished:
-            ep_result = call_skill(
-                "event_polisher",
-                user_prompt=f"事件 raw：{ev.content_raw}\n请润色为 polished 文本。",
-            )
-            # 7a. 优先使用 LLM 在 content 中的回复
-            polished_text = ep_result.get("content", "").strip()
-            # 去掉 markdown 代码块包裹
-            if polished_text.startswith("```"):
-                import re
-                m = re.search(r"```(?:\w+)?\s*([\s\S]+?)\s*```", polished_text)
-                if m:
-                    polished_text = m.group(1).strip()
-            if polished_text:
-                models.Event.update(eid, content_polished=polished_text)
-                polished += 1
-            else:
-                # 7b. LLM 可能通过 world_polish_event 工具直接润色了
-                for tr in ep_result.get("tool_results", []):
-                    if tr.get("tool") == "world_polish_event":
-                        polished += 1
-                        break
-    # 统计事件创建时已经带 polished 的数量
-    pre_polished = sum(
-        1 for eid in events_created
-        if (ev := models.Event.get(eid)) and ev.content_polished
-    )
-    trace.append({"step": 7, "name": "event_polisher", "polished": polished, "pre_polished": pre_polished})
+    pre_polished = 0
+    if polish_mode == "none":
+        # 无润色：不调用模型，content_polished 直接写原文
+        for eid in events_created:
+            ev = models.Event.get(eid)
+            if ev:
+                models.Event.update(eid, content_polished=ev.content_raw)
+        pre_polished = len(events_created)
+        trace.append({"step": 7, "name": "event_polisher", "mode": "none", "pre_polished": pre_polished})
+    else:
+        # 润色：先由模型选风格，再调用对应 polisher_<style> skill 回填 content_polished
+        for eid in events_created:
+            ev = models.Event.get(eid)
+            if ev and not ev.content_polished:
+                style_key = _select_polish_style(ev.content_raw)
+                polisher_name = _polisher_for_style(style_key)
+                ep_result = call_skill(
+                    polisher_name,
+                    user_prompt=(
+                        f"事件 raw：{ev.content_raw}\n"
+                        f"请按当前润色模式（{polish_mode}）润色为 polished 文本。"
+                    ),
+                )
+                # 7a. 优先使用 LLM 在 content 中的回复
+                polished_text = ep_result.get("content", "").strip()
+                # 去掉 markdown 代码块包裹
+                if polished_text.startswith("```"):
+                    import re
+                    m = re.search(r"```(?:\w+)?\s*([\s\S]+?)\s*```", polished_text)
+                    if m:
+                        polished_text = m.group(1).strip()
+                if polished_text:
+                    models.Event.update(eid, content_polished=polished_text)
+                    polished += 1
+                else:
+                    # 7b. LLM 可能通过 world_polish_event 工具直接润色了
+                    for tr in ep_result.get("tool_results", []):
+                        if tr.get("tool") == "world_polish_event":
+                            polished += 1
+                            break
+        # 统计事件创建时已经带 polished 的数量
+        pre_polished = sum(
+            1 for eid in events_created
+            if (ev := models.Event.get(eid)) and ev.content_polished
+        )
+        trace.append({"step": 7, "name": "event_polisher", "mode": polish_mode, "polished": polished, "pre_polished": pre_polished})
 
     return {
         "tick": meta["tick_num"],
