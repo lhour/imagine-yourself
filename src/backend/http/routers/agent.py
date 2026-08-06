@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.backend.http.deps import require_active_save
-from src.backend.agent import advance_pipeline, pipeline, time_jump_pipeline
+from src.backend.agent import advance_pipeline, pipeline, time_jump_pipeline, trace
 from src.backend.agent.skill.loader import (
     list_skills, get_skill, render_skill,
     list_skill_versions, get_skill_version_detail,
@@ -47,12 +47,13 @@ def test_connection(req: TestConnectionReq, sm=Depends(require_active_save)):
     try:
         sys_p = req.system_prompt or "You are a helpful assistant. Reply with exactly \"PONG\" in Chinese."
         usr_p = req.user_prompt or "Ping me."
-        r = chat_completion(
-            sys_p, usr_p,
-            model=req.model,
-            temperature=0.0,
-            max_tokens=512,
-        )
+        with trace.request("test_connection", action="test_connection", save=sm.active_save):
+            r = chat_completion(
+                sys_p, usr_p,
+                model=req.model,
+                temperature=0.0,
+                max_tokens=512,
+            )
         latency = int((time.time() - t0) * 1000)
         content = (r.get("content") or "").strip()
         usage = r.get("usage") or {}
@@ -138,7 +139,10 @@ class SetActiveReq(BaseModel):
 def run_tick(req: TickReq, sm=Depends(require_active_save)):
     """执行完整 tick 管线（7 步）。"""
     try:
-        return pipeline.tick_once(req.seconds, req.max_actors, req.player_action)
+        with trace.request("tick", action="tick", save=sm.active_save):
+            result = pipeline.tick_once(req.seconds, req.max_actors, req.player_action)
+            result["trace_id"] = trace.current_trace_id()
+            return result
     except RuntimeError as e:
         raise HTTPException(400, str(e))
 
@@ -147,10 +151,13 @@ def run_tick(req: TickReq, sm=Depends(require_active_save)):
 def run_advance(req: AdvanceReq, sm=Depends(require_active_save)):
     """统一时间推进：按跨度自动选择 tick 或 time_jump 编排剧情。"""
     try:
-        return advance_pipeline.advance(
-            req.seconds,
-            player_action=req.player_action,
-        )
+        with trace.request("advance", action="advance", save=sm.active_save):
+            result = advance_pipeline.advance(
+                req.seconds,
+                player_action=req.player_action,
+            )
+            result["trace_id"] = trace.current_trace_id()
+            return result
     except RuntimeError as e:
         raise HTTPException(400, str(e))
 
@@ -159,7 +166,10 @@ def run_advance(req: AdvanceReq, sm=Depends(require_active_save)):
 def run_time_jump(req: TimeJumpReq, sm=Depends(require_active_save)):
     """执行时间跨越管线。"""
     try:
-        return time_jump_pipeline.time_jump(req.seconds)
+        with trace.request("time_jump", action="time_jump", save=sm.active_save):
+            result = time_jump_pipeline.time_jump(req.seconds)
+            result["trace_id"] = trace.current_trace_id()
+            return result
     except RuntimeError as e:
         raise HTTPException(400, str(e))
 
@@ -169,14 +179,17 @@ def call_skill_endpoint(name: str, req: CallSkillReq, sm=Depends(require_active_
     """直接调单个 skill（开发/调试用）。"""
     if not get_skill(name):
         raise HTTPException(404, f"skill {name} 不存在")
-    return pipeline.call_skill(
-        skill_name=name,
-        user_prompt=req.user_prompt,
-        variables=req.variables,
-        extra_tools=req.extra_tools,
-        temperature=req.temperature,
-        max_tokens=req.max_tokens,
-    )
+    with trace.request(f"call_skill:{name}", action="call_skill", save=sm.active_save, skill=name):
+        result = pipeline.call_skill(
+            skill_name=name,
+            user_prompt=req.user_prompt,
+            variables=req.variables,
+            extra_tools=req.extra_tools,
+            temperature=req.temperature,
+            max_tokens=req.max_tokens,
+        )
+        result["trace_id"] = trace.current_trace_id()
+        return result
 
 
 # ============================================================

@@ -257,3 +257,31 @@ export const configApi = {
     api.patch('/config', body).then((r) => r.data),
   reset: () => api.post('/config/_reset').then((r) => r.data),
 };
+
+// ============================================================
+// 请求日志 / 调用链追踪
+// ============================================================
+
+export interface TraceSummary {
+  id: string;
+  ts?: string;
+  name?: string;
+  action?: string;
+  save?: string;
+  span_count: number;
+  model_rounds: number;
+  tool_calls: number;
+  skills: number;
+  duration_ms?: number;
+  status?: string;
+}
+
+export const tracesApi = {
+  list: (limit = 200, action?: string) =>
+    api.get<{ items: TraceSummary[]; count: number }>('/traces', { params: { limit, action } })
+      .then((r) => r.data),
+  get: <T = Record<string, unknown>>(tid: string) =>
+    api.get<T>(`/traces/${tid}`).then((r) => r.data),
+  clear: () =>
+    api.delete<{ cleared: number }>('/traces').then((r) => r.data),
+};

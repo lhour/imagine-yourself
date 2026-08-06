@@ -7,6 +7,7 @@ import SavesPage from './pages/SavesPage';
 import DramasPage from './pages/DramasPage';
 import ModelPage from './pages/ModelPage';
 import SettingsPage from './pages/SettingsPage';
+import RequestLogPage from './pages/RequestLogPage';
 import './App.css';
 
 function App() {
@@ -43,6 +44,8 @@ function App() {
           <Route path="/dramas" element={<DramasPage />} />
           <Route path="/model" element={<ModelPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/traces" element={<RequestLogPage />} />
+          <Route path="/trace" element={<Navigate to="/traces" replace />} />
           <Route path="/play" element={<GamePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

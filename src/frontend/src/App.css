@@ -50,15 +50,15 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 8px 14px;
   color: #a8a8a8;
   text-decoration: none;
-  border-radius: 4px;
+  border-bottom: 2px solid transparent;
   font-size: 13px;
   transition: all 0.15s;
 }
-.admin-nav-list li a:hover { background: #1f1f1f; color: #e6e1d8; }
-.admin-nav-list li.active a { background: #2a3a5a; color: #d0d8e8; }
+.admin-nav-list li a:hover { color: #e6e1d8; }
+.admin-nav-list li.active a { color: #d0a868; border-bottom-color: #d0a868; }
 
 /* === 管理页面通用容器 === */
 .admin-page {
@@ -1968,9 +1968,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent-blue); ou
 }
 
 .admin-nav-brand { color: var(--accent); font-weight: 700; letter-spacing: 0.4px; }
-.admin-nav-list li a { color: var(--text-secondary); border-radius: var(--radius-sm); font-size: 13px; }
-.admin-nav-list li a:hover { background: var(--bg-hover); color: var(--text-primary); }
-.admin-nav-list li.active a { background: var(--accent-blue-soft); color: var(--accent-blue); }
+.admin-nav-list li a { color: var(--text-secondary); border-bottom: 2px solid transparent; font-size: 13px; }
+.admin-nav-list li a:hover { color: var(--text-primary); }
+.admin-nav-list li.active a { color: var(--accent); border-bottom-color: var(--accent); }
 
 .admin-content { padding: 24px 32px; }
 .admin-header h1 { font-size: 22px; color: var(--text-primary); }

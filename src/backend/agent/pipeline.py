@@ -13,9 +13,11 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 from src.backend import deepseek_client
+from src.backend.agent import trace
 from src.backend.agent.skill.loader import render_skill
 from src.backend.agent.tool.base import ToolManager
 from src.backend.env import load_backend_env
@@ -85,15 +87,21 @@ def call_skill(
         """LLM 工具执行回调：把工具调用委托给 ToolManager。"""
         return ToolManager.execute(name, args)
 
-    resp = deepseek_client.chat_completion(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt or "(无 user prompt，按 system 指令执行)",
-        tools=tools_schema if tools_schema else None,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        max_tool_rounds=5,
-        tool_executor=_tool_executor if tools_schema else None,
-    )
+    with trace.span(f"skill:{skill_name}", "skill_call", skill_name=skill_name) as ss:
+        resp = deepseek_client.chat_completion(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt or "(无 user prompt，按 system 指令执行)",
+            tools=tools_schema if tools_schema else None,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            max_tool_rounds=5,
+            tool_executor=_tool_executor if tools_schema else None,
+        )
+        ss.record(
+            rounds=resp.get("rounds", 1),
+            mock=deepseek_client.is_mock_mode(),
+            usage=resp.get("usage"),
+        )
 
     # tool_results 由 deepseek_client 内部已执行并收集
     tool_results: List[Dict[str, Any]] = resp.get("tool_results", [])
@@ -188,25 +196,34 @@ def tick_once(seconds: int = 60, max_actors: int = 5, player_action: Optional[st
         raise RuntimeError("无激活存档")
 
     variables = _build_variables()
-    trace: List[Dict[str, Any]] = []
+    steps: List[Dict[str, Any]] = []
+
+    def _run_parallel(fns: List[Any], max_workers: int = 8) -> List[Any]:
+        """并发执行一批无参函数，返回结果（保持提交顺序）。"""
+        if len(fns) <= 1:
+            return [f() for f in fns]
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = [ex.submit(f) for f in fns]
+            return [f.result() for f in futures]
 
     # ---- Step 1: 推进元信息 ----
-    meta = world_service.tick_once(seconds)
-    trace.append({"step": 1, "name": "advance_tick", "meta": meta})
+    with trace.span("advance_tick", "step", step=1):
+        meta = world_service.tick_once(seconds)
+    steps.append({"step": 1, "name": "advance_tick", "meta": meta})
 
     # ---- Step 1.5: 玩家瞬间动作注入（可选）----
     player_event_id: Optional[int] = None
     if player_action and player_action.strip():
-        pe = world_service.create_event(
-            event_type="player_action",
-            content_raw=player_action.strip(),
-            importance=5,
-        )
+        with trace.span("player_action", "step", step=1.5):
+            pe = world_service.create_event(
+                event_type="player_action",
+                content_raw=player_action.strip(),
+                importance=5,
+            )
         player_event_id = pe["id"]
-        trace.append({"step": 1.5, "name": "player_action", "event_id": player_event_id, "text": player_action.strip()})
+        steps.append({"step": 1.5, "name": "player_action", "event_id": player_event_id, "text": player_action.strip()})
 
     # ---- Step 2: 记忆衰减 ----
-    # 取所有有记忆的角色
     sm_db = sm._conn  # type: ignore[union-attr]
     char_ids_with_mem = [
         row["char_id"] for row in sm_db.execute(
@@ -214,30 +231,33 @@ def tick_once(seconds: int = 60, max_actors: int = 5, player_action: Optional[st
         ).fetchall()
     ]
     decayed_total = 0
-    for cid in char_ids_with_mem[:20]:  # 限制每 tick 处理的角色数
-        r = memory_service.decay_memories(cid, ticks_passed=1)
-        decayed_total += r["decayed_count"]
-    trace.append({"step": 2, "name": "memory_decay", "chars": len(char_ids_with_mem), "decayed": decayed_total})
+    with trace.span("memory_decay", "step", step=2, chars=len(char_ids_with_mem)):
+        for cid in char_ids_with_mem[:20]:  # 限制每 tick 处理的角色数
+            r = memory_service.decay_memories(cid, ticks_passed=1)
+            decayed_total += r["decayed_count"]
+    steps.append({"step": 2, "name": "memory_decay", "chars": len(char_ids_with_mem), "decayed": decayed_total})
 
-    # ---- Step 3: 任务/纲领监控 ----
-    qm_result = call_skill("quest_monitor", user_prompt="检查所有 in_progress 任务")
-    trace.append({"step": 3, "name": "quest_monitor", "mock": qm_result["mock"], "tool_calls": len(qm_result.get("tool_results", []))})
+    # ---- Step 3: 任务/纲领监控（并发）----
+    with trace.span("monitors", "step", step=3):
+        mon_results = _run_parallel([
+            lambda: call_skill("quest_monitor", user_prompt="检查所有 in_progress 任务"),
+            lambda: call_skill("agenda_monitor", user_prompt="检查所有 active 纲领"),
+        ])
+    qm_result = mon_results[0] if mon_results else {}
+    am_result = mon_results[1] if len(mon_results) > 1 else {}
+    steps.append({"step": 3, "name": "quest_monitor", "mock": qm_result.get("mock"), "tool_calls": len(qm_result.get("tool_results", []))})
+    steps.append({"step": 3.1, "name": "agenda_monitor", "mock": am_result.get("mock")})
 
-    am_result = call_skill("agenda_monitor", user_prompt="检查所有 active 纲领")
-    trace.append({"step": 3.1, "name": "agenda_monitor", "mock": am_result["mock"]})
-
-    # ---- Step 4: NPC 决策 ----
-    # 取活跃角色（有位置的 + 非死亡的）
+    # ---- Step 4: NPC 决策（并发）----
     active_chars = models.Character.list(
         where="dead_at_tick IS NULL", order_by="importance DESC", limit=max_actors
     )
     proto = sm.get_protagonist()
     proto_id = proto.get("id") if proto else None
-    decisions: List[Dict[str, Any]] = []
-    for c in active_chars:
+
+    def _decide(c: Any) -> Dict[str, Any]:
         scene_vars = {**variables, "role_name": c.name, "scene_description": c.status or "正常"}
         if player_action and c.id == proto_id:
-            # 主角：用 player_action skill 把玩家瞬间动作转化为决策
             decision = call_skill(
                 "player_action",
                 user_prompt=(
@@ -253,8 +273,13 @@ def tick_once(seconds: int = 60, max_actors: int = 5, player_action: Optional[st
                 user_prompt=f"角色：{c.name}\n状态：{c.status or '正常'}\n请决策本 tick 行动。",
                 variables=scene_vars,
             )
-        decisions.append({"char_id": c.id, "char_name": c.name, "decision": decision.get("parsed") or decision.get("content")})
-    trace.append({"step": 4, "name": "actor_decide", "actors": len(decisions), "decisions": decisions})
+        return {"char_id": c.id, "char_name": c.name, "decision": decision.get("parsed") or decision.get("content")}
+
+    decisions: List[Dict[str, Any]] = []
+    if active_chars:
+        with trace.span("actor_decide", "step", step=4, actors=len(active_chars)):
+            decisions = _run_parallel([lambda c=c: _decide(c) for c in active_chars])
+    steps.append({"step": 4, "name": "actor_decide", "actors": len(decisions), "decisions": decisions})
 
     # ---- Step 5: 世界反应合成事件 ----
     decisions_json = json.dumps(decisions, ensure_ascii=False, default=str)
@@ -273,7 +298,7 @@ def tick_once(seconds: int = 60, max_actors: int = 5, player_action: Optional[st
                 if result.get("id"):
                     events_created.append(result["id"])
                 elif result.get("error"):
-                    trace.append({"step": 5, "error": f"world_create_event 失败: {result['error']}"})
+                    steps.append({"step": 5, "error": f"world_create_event 失败: {result['error']}"})
 
     # 5b. 兼容旧模式：LLM 在 content 中返回 JSON {"events": [...]}
     if wr_result.get("parsed") and isinstance(wr_result["parsed"], dict):
@@ -289,8 +314,8 @@ def tick_once(seconds: int = 60, max_actors: int = 5, player_action: Optional[st
                 )
                 events_created.append(e["id"])
             except Exception as ex:
-                trace.append({"step": 5, "error": f"事件创建失败: {ex}"})
-    trace.append({
+                steps.append({"step": 5, "error": f"事件创建失败: {ex}"})
+    steps.append({
         "step": 5, "name": "world_react",
         "events_created": events_created,
         "mock": wr_result["mock"],
@@ -300,13 +325,14 @@ def tick_once(seconds: int = 60, max_actors: int = 5, player_action: Optional[st
 
     # ---- Step 6: 事件编码为记忆 ----
     encoded_total = 0
-    for eid in events_created:
-        try:
-            mems = memory_service.encode_event_to_memories(eid)
-            encoded_total += len(mems)
-        except Exception:
-            pass
-    trace.append({"step": 6, "name": "memory_encode", "encoded": encoded_total})
+    with trace.span("memory_encode", "step", step=6):
+        for eid in events_created:
+            try:
+                mems = memory_service.encode_event_to_memories(eid)
+                encoded_total += len(mems)
+            except Exception:
+                pass
+    steps.append({"step": 6, "name": "memory_encode", "encoded": encoded_total})
 
     # ---- Step 7: 事件润色（独立节点，受 polish_mode 控制，与主管线解耦）----
     polish_mode = variables.get("polish_mode", "none")
@@ -314,54 +340,59 @@ def tick_once(seconds: int = 60, max_actors: int = 5, player_action: Optional[st
     pre_polished = 0
     if polish_mode == "none":
         # 无润色：不调用模型，content_polished 直接写原文
-        for eid in events_created:
-            ev = models.Event.get(eid)
-            if ev:
-                models.Event.update(eid, content_polished=ev.content_raw)
+        with trace.span("event_polisher", "step", step=7, mode="none"):
+            for eid in events_created:
+                ev = models.Event.get(eid)
+                if ev:
+                    models.Event.update(eid, content_polished=ev.content_raw)
         pre_polished = len(events_created)
-        trace.append({"step": 7, "name": "event_polisher", "mode": "none", "pre_polished": pre_polished})
+        steps.append({"step": 7, "name": "event_polisher", "mode": "none", "pre_polished": pre_polished})
     else:
-        # 润色：先由模型选风格，再调用对应 polisher_<style> skill 回填 content_polished
-        for eid in events_created:
+        # 润色：先由模型选风格，再调用对应 polisher_<style> skill 回填 content_polished（并发）
+        def _polish(eid: int) -> int:
             ev = models.Event.get(eid)
-            if ev and not ev.content_polished:
-                style_key = _select_polish_style(ev.content_raw)
-                polisher_name = _polisher_for_style(style_key)
-                ep_result = call_skill(
-                    polisher_name,
-                    user_prompt=(
-                        f"事件 raw：{ev.content_raw}\n"
-                        f"请按当前润色模式（{polish_mode}）润色为 polished 文本。"
-                    ),
-                )
-                # 7a. 优先使用 LLM 在 content 中的回复
-                polished_text = ep_result.get("content", "").strip()
-                # 去掉 markdown 代码块包裹
-                if polished_text.startswith("```"):
-                    import re
-                    m = re.search(r"```(?:\w+)?\s*([\s\S]+?)\s*```", polished_text)
-                    if m:
-                        polished_text = m.group(1).strip()
-                if polished_text:
-                    models.Event.update(eid, content_polished=polished_text)
-                    polished += 1
-                else:
-                    # 7b. LLM 可能通过 world_polish_event 工具直接润色了
-                    for tr in ep_result.get("tool_results", []):
-                        if tr.get("tool") == "world_polish_event":
-                            polished += 1
-                            break
+            if not ev or ev.content_polished:
+                return 0
+            style_key = _select_polish_style(ev.content_raw)
+            polisher_name = _polisher_for_style(style_key)
+            ep_result = call_skill(
+                polisher_name,
+                user_prompt=(
+                    f"事件 raw：{ev.content_raw}\n"
+                    f"请按当前润色模式（{polish_mode}）润色为 polished 文本。"
+                ),
+            )
+            # 7a. 优先使用 LLM 在 content 中的回复
+            polished_text = ep_result.get("content", "").strip()
+            # 去掉 markdown 代码块包裹
+            if polished_text.startswith("```"):
+                import re
+                m = re.search(r"```(?:\w+)?\s*([\s\S]+?)\s*```", polished_text)
+                if m:
+                    polished_text = m.group(1).strip()
+            if polished_text:
+                models.Event.update(eid, content_polished=polished_text)
+                return 1
+            # 7b. LLM 可能通过 world_polish_event 工具直接润色了
+            for tr in ep_result.get("tool_results", []):
+                if tr.get("tool") == "world_polish_event":
+                    return 1
+            return 0
+
+        with trace.span("event_polisher", "step", step=7, mode=polish_mode):
+            if events_created:
+                polished = sum(_run_parallel([lambda e=eid: _polish(e) for eid in events_created]))
         # 统计事件创建时已经带 polished 的数量
         pre_polished = sum(
             1 for eid in events_created
             if (ev := models.Event.get(eid)) and ev.content_polished
         )
-        trace.append({"step": 7, "name": "event_polisher", "mode": polish_mode, "polished": polished, "pre_polished": pre_polished})
+        steps.append({"step": 7, "name": "event_polisher", "mode": polish_mode, "polished": polished, "pre_polished": pre_polished})
 
     return {
         "tick": meta["tick_num"],
         "game_time": meta["game_time"],
-        "trace": trace,
+        "trace": steps,
         "events_created": events_created,
         "decisions": decisions,
         "mock_mode": deepseek_client.is_mock_mode(),

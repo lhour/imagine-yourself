@@ -5,6 +5,7 @@ const NAV_ITEMS = [
   { path: '/saves', label: '存档', icon: '📂' },
   { path: '/dramas', label: '剧本', icon: '📜' },
   { path: '/model', label: '模型', icon: '🤖' },
+  { path: '/traces', label: '日志', icon: '📊' },
   { path: '/settings', label: '设置', icon: '⚙' },
   { path: '/play', label: '游戏', icon: '🎮' },
 ];

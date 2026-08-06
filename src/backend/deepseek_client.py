@@ -11,6 +11,7 @@ import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from src.backend.env import load_backend_env
+from src.backend.agent import trace
 
 load_backend_env()
 
@@ -90,7 +91,20 @@ def chat_completion(
     # 先调 is_mock_mode() 触发 _get_client() 初始化 _mock_mode 标志
     # （避免首次调用时 _mock_mode 还是 False 但 client 为 None 的竞态）
     if is_mock_mode():
-        return {**_mock_response(system_prompt, user_prompt, tools), "mock": True, "tool_results": [], "rounds": 1}
+        mock_resp = _mock_response(system_prompt, user_prompt, tools)
+        with trace.span(f"model_call#1", "model_call",
+                        system_prompt=system_prompt, user_prompt=user_prompt,
+                        temperature=temperature, max_tokens=max_tokens, model="mock") as ms:
+            ms.record(output=mock_resp.get("content"), think=mock_resp.get("reasoning_content"),
+                      usage=mock_resp.get("usage"), mock=True)
+        return {**mock_resp, "mock": True, "tool_results": [], "rounds": 1,
+                "llm_rounds": [{
+                    "round": 1, "mock": True,
+                    "prompt": {"system": system_prompt, "user": user_prompt},
+                    "think": mock_resp.get("reasoning_content"),
+                    "output": mock_resp.get("content"),
+                    "tool_calls_requested": [],
+                }]}
 
     client = _get_client()
     messages: List[Dict[str, Any]] = [
@@ -114,82 +128,106 @@ def chat_completion(
     total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     last_resp = None
     rounds = 0
+    llm_rounds: List[Dict[str, Any]] = []
 
     while rounds < max_tool_rounds:
         rounds += 1
-        resp = client.chat.completions.create(**kwargs)  # type: ignore[union-attr]
-        last_resp = resp
-        msg = resp.choices[0].message
+        with trace.span(f"model_call#{rounds}", "model_call",
+                        system_prompt=system_prompt, user_prompt=user_prompt,
+                        temperature=temperature, max_tokens=max_tokens,
+                        model=kwargs.get("model")) as ms:
+            resp = client.chat.completions.create(**kwargs)  # type: ignore[union-attr]
+            last_resp = resp
+            msg = resp.choices[0].message
 
-        # 累计 usage
-        if resp.usage:
-            total_usage["prompt_tokens"] += resp.usage.prompt_tokens
-            total_usage["completion_tokens"] += resp.usage.completion_tokens
-            total_usage["total_tokens"] += resp.usage.total_tokens
+            # 累计 usage
+            if resp.usage:
+                total_usage["prompt_tokens"] += resp.usage.prompt_tokens
+                total_usage["completion_tokens"] += resp.usage.completion_tokens
+                total_usage["total_tokens"] += resp.usage.total_tokens
 
-        # 若无 tool_calls，已经得到最终回答，退出循环
-        if not msg.tool_calls:
-            break
-
-        # 有 tool_calls：执行并把结果加入 messages
-        # 1) 把 assistant 的 tool_calls 消息加入历史
-        messages.append({
-            "role": "assistant",
-            "content": msg.content or "",
-            "tool_calls": [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                }
-                for tc in msg.tool_calls
-            ],
-        })
-
-        # 2) 执行每个工具，加入对应的 tool 消息
-        for tc in msg.tool_calls:
-            tc_name = tc.function.name
-            try:
-                tc_args = tc.function.arguments
-                tc_args = json.loads(tc_args) if isinstance(tc_args, str) else tc_args
-            except json.JSONDecodeError:
-                tc_args = {}
-
-            all_tool_calls.append({"id": tc.id, "name": tc_name, "arguments": tc_args})
-
-            # 执行工具
-            tool_result_value: Any = None
-            if tool_executor is not None:
-                try:
-                    tool_result_value = tool_executor(tc_name, tc_args)
-                except Exception as ex:
-                    tool_result_value = {"error": f"{type(ex).__name__}: {ex}"}
-            else:
-                tool_result_value = {"_skipped": "no tool_executor provided"}
-
-            all_tool_results.append({
-                "tool": tc_name,
-                "arguments": tc_args,
-                "result": tool_result_value,
+            round_think = getattr(msg, "reasoning_content", None)
+            round_output = msg.content or ""
+            round_tool_reqs = [
+                {"id": tc.id, "name": tc.function.name, "arguments": tc.function.arguments}
+                for tc in (msg.tool_calls or [])
+            ]
+            ms.record(think=round_think, output=round_output,
+                      usage=dict(resp.usage) if resp.usage else None,
+                      tool_calls_requested=round_tool_reqs)
+            llm_rounds.append({
+                "round": rounds,
+                "prompt": {"system": system_prompt, "user": user_prompt},
+                "think": round_think,
+                "output": round_output,
+                "tool_calls_requested": round_tool_reqs,
             })
 
-            # 把工具结果作为 tool role 消息加入对话
-            # OpenAI 格式要求 tool role 的 content 是字符串
-            try:
-                tool_content = json.dumps(tool_result_value, ensure_ascii=False, default=str)
-            except (TypeError, ValueError):
-                tool_content = str(tool_result_value)
+            # 若无 tool_calls，已经得到最终回答，退出循环
+            if not msg.tool_calls:
+                break
+
+            # 有 tool_calls：执行并把结果加入 messages
+            # 1) 把 assistant 的 tool_calls 消息加入历史
             messages.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": tool_content,
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in msg.tool_calls
+                ],
             })
 
-        # 更新 messages 给下一轮（已就地修改 messages）
-        kwargs["messages"] = messages
-        # 下一轮不再需要显式 tool_choice（让模型自主决定）
-        if "tool_choice" in kwargs and tool_choice != "required":
-            kwargs.pop("tool_choice", None)
+            # 2) 执行每个工具，加入对应的 tool 消息
+            for tc in msg.tool_calls:
+                tc_name = tc.function.name
+                try:
+                    tc_args = tc.function.arguments
+                    tc_args = json.loads(tc_args) if isinstance(tc_args, str) else tc_args
+                except json.JSONDecodeError:
+                    tc_args = {}
+
+                all_tool_calls.append({"id": tc.id, "name": tc_name, "arguments": tc_args})
+
+                # 执行工具（记录为 tool_call span）
+                with trace.span(f"tool:{tc_name}", "tool_call", arguments=tc_args) as ts:
+                    tool_result_value: Any = None
+                    if tool_executor is not None:
+                        try:
+                            tool_result_value = tool_executor(tc_name, tc_args)
+                        except Exception as ex:
+                            tool_result_value = {"error": f"{type(ex).__name__}: {ex}"}
+                    else:
+                        tool_result_value = {"_skipped": "no tool_executor provided"}
+                    ts.record(result=tool_result_value)
+
+                all_tool_results.append({
+                    "tool": tc_name,
+                    "arguments": tc_args,
+                    "result": tool_result_value,
+                })
+
+                # 把工具结果作为 tool role 消息加入对话
+                # OpenAI 格式要求 tool role 的 content 是字符串
+                try:
+                    tool_content = json.dumps(tool_result_value, ensure_ascii=False, default=str)
+                except (TypeError, ValueError):
+                    tool_content = str(tool_result_value)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": tool_content,
+                })
+
+            # 更新 messages 给下一轮（已就地修改 messages）
+            kwargs["messages"] = messages
+            # 下一轮不再需要显式 tool_choice（让模型自主决定）
+            if "tool_choice" in kwargs and tool_choice != "required":
+                kwargs.pop("tool_choice", None)
 
     elapsed_ms = int((time.time() - t0) * 1000)
 
@@ -208,6 +246,7 @@ def chat_completion(
         "elapsed_ms": elapsed_ms,
         "mock": False,
         "rounds": rounds,
+        "llm_rounds": llm_rounds,
     }
 
 

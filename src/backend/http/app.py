@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.backend.env import load_backend_env
 from src.backend.http.routers import (
-    agent, character_profiles, config, dramas, entities, groups, maps, memory, saves, world
+    agent, character_profiles, config, dramas, entities, groups, maps, memory, saves, traces, world
 )
 
 load_backend_env()
@@ -38,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(world.router)
     app.include_router(dramas.router)
     app.include_router(agent.router)
+    app.include_router(traces.router)
 
     @app.get("/api/health", tags=["system"])
     def health():

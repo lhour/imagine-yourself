@@ -1,0 +1,38 @@
+{
+  "ui_defaults": {
+    "default_tps": 1.0,
+    "default_era_display_mode": "polished",
+    "default_heatmap_opacity": 0.55,
+    "default_map_zoom": 1.0,
+    "event_importance_threshold": 0,
+    "show_debug_info": false,
+    "theme": "dark"
+  },
+  "simulation": {
+    "tps_default": 1.0,
+    "tps_min": 0.0,
+    "tps_max": 240.0,
+    "max_events_per_tick": 20,
+    "memory_decay_per_tick": 0.01,
+    "heatmap_update_interval_ticks": 10,
+    "polish_mode": "none"
+  },
+  "memory": {
+    "retrieve_max_default": 30,
+    "palace_default_depth": 2,
+    "index_sampling_rate": 1.0
+  },
+  "llm_pipeline": {
+    "enabled": false,
+    "provider": "stub",
+    "model": "",
+    "api_base": "",
+    "api_key": "",
+    "max_tokens_per_request": 2048
+  },
+  "privacy": {
+    "allow_data_collection": false,
+    "saves_store_path": "",
+    "retention_days": 0
+  }
+}
