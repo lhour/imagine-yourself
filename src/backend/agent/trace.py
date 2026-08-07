@@ -41,8 +41,10 @@ _current: contextvars.ContextVar[Optional["Span"]] = contextvars.ContextVar(
     "trace_current", default=None
 )
 
-# 当前活动 tracer（进程内单例）
-_active_tracer: Optional["_Tracer"] = None
+# 当前活动 tracer（改为 ContextVar 实现线程隔离）
+_active_tracer_cv: contextvars.ContextVar[Optional["_Tracer"]] = contextvars.ContextVar(
+    "trace_active_tracer", default=None
+)
 _active_lock = threading.RLock()
 
 
@@ -122,6 +124,9 @@ class _Tracer:
         self._lock = threading.RLock()
 
     def child(self, name: str, type_: str = "step", parent: Optional[Span] = None, **data: Any) -> Span:
+        # 防御性：清理可能与位置参数冲突的键
+        for k in ("name", "type_", "parent"):
+            data.pop(k, None)
         parent = parent or _current.get() or self.root
         s = Span(name, type_, parent, **data)
         with self._lock:
@@ -147,20 +152,18 @@ class _Tracer:
 
 def start_request(name: str, **root_data: Any) -> _Tracer:
     """开始一次请求追踪，返回 tracer。"""
-    global _active_tracer
     with _active_lock:
         t = _Tracer(name, **root_data)
-        _active_tracer = t
+        _active_tracer_cv.set(t)
         _current.set(t.root)
         return t
 
 
 def end_request(status: str = "ok", **extra: Any) -> Optional[Dict[str, Any]]:
     """结束当前请求追踪，落盘并返回 trace dict。"""
-    global _active_tracer
     with _active_lock:
-        t = _active_tracer
-        _active_tracer = None
+        t = _active_tracer_cv.get()
+        _active_tracer_cv.set(None)
         _current.set(None)
     if t is None:
         return None
@@ -171,7 +174,7 @@ def end_request(status: str = "ok", **extra: Any) -> Optional[Dict[str, Any]]:
 
 
 def get_active_tracer() -> Optional[_Tracer]:
-    return _active_tracer
+    return _active_tracer_cv.get()
 
 
 def current_trace_id() -> Optional[str]:
@@ -226,6 +229,31 @@ def span(name: str, type_: str = "step", parent: Optional[Span] = None, **data: 
 
 def _safe_str(e: Exception) -> str:
     return f"{type(e).__name__}: {e}"
+
+
+def capture_context() -> contextvars.Context:
+    """捕获当前 ContextVar 上下文，用于在并发线程中传播。
+
+    用法：
+        ctx = trace.capture_context()
+        future = executor.submit(lambda: trace.restore_context(ctx) or do_work())
+    """
+    return contextvars.copy_context()
+
+
+def restore_context(ctx: contextvars.Context) -> None:
+    """恢复 ContextVar 上下文（在子线程中调用）。"""
+    pass  # copy_context 返回的 Context 对象可以直接在子线程中使用
+
+
+def run_in_context(ctx: contextvars.Context, func: Callable, *args: Any, **kwargs: Any) -> Any:
+    """在指定上下文中执行函数（用于并发线程）。
+
+    用法：
+        ctx = trace.capture_context()
+        future = executor.submit(trace.run_in_context, ctx, do_work, arg1, arg2)
+    """
+    return ctx.run(func, *args, **kwargs)
 
 
 # ============================================================

@@ -199,11 +199,16 @@ def tick_once(seconds: int = 60, max_actors: int = 5, player_action: Optional[st
     steps: List[Dict[str, Any]] = []
 
     def _run_parallel(fns: List[Any], max_workers: int = 8) -> List[Any]:
-        """并发执行一批无参函数，返回结果（保持提交顺序）。"""
+        """并发执行一批无参函数，返回结果（保持提交顺序）。
+
+        使用 trace.capture_context() 确保 ContextVar 在子线程中正确传播。
+        """
         if len(fns) <= 1:
             return [f() for f in fns]
+        # 捕获当前 ContextVar 上下文
+        ctx = trace.capture_context()
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futures = [ex.submit(f) for f in fns]
+            futures = [ex.submit(trace.run_in_context, ctx, f) for f in fns]
             return [f.result() for f in futures]
 
     # ---- Step 1: 推进元信息 ----
