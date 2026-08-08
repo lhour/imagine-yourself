@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { EventRecord, EventParticipant, Character } from '../api/types';
 import { worldApi, entitiesApi } from '../api/client';
@@ -184,14 +184,19 @@ function EventCard({
     if (!r && !f) return '';
     return ['【记得】', r, '【遗忘】', f].filter(Boolean).join('\n');
   }, [event]);
+  const isNarrative = event.event_type === 'narrative';
   return (
     <div
-      className={clsx(`event-card importance-${importance}`, highlighted && 'ev-highlighted')}
+      className={clsx(
+        `event-card importance-${importance}`,
+        highlighted && 'ev-highlighted',
+        isNarrative && 'event-card-narrative',
+      )}
       onClick={() => onOpen(event.id)}
       title={rememberedTooltip || undefined}
     >
       <div className="event-header">
-        <span className="event-type">{typeLabel(event.event_type)}</span>
+        <span className="event-type">{isNarrative ? '📖 剧情' : typeLabel(event.event_type)}</span>
         <span className="event-meta">
           {event.location_detail_raw && <span className="event-location">📍 {event.location_detail_raw}</span>}
           <span className="event-stars" title={`重要性 ${importance}/5`}>
@@ -201,13 +206,14 @@ function EventCard({
           <span className="event-time">#{event.id}</span>
         </span>
       </div>
-      <div className="event-content">
+      <div className={clsx('event-content', isNarrative && 'narrative-content')}>
         {event.content_polished || event.content_raw || '（空事件）'}
       </div>
       {showRaw && event.content_raw && (
         <div className="event-raw">原文：{event.content_raw}</div>
       )}
-      {anyParticipants && (
+      {/* narrative 事件隐藏参与者 chips，突出剧情文本 */}
+      {!isNarrative && anyParticipants && (
         <div className="event-chips-row">
           {(event.participants ?? []).slice(0, 10).map((p) => (
             <span
@@ -243,12 +249,19 @@ function EventCard({
 export default function EventStreamPanel() {
   const events = useGameStore((s) => s.events);
   const loading = useGameStore((s) => s.eventsLoading);
+  const loadingOlder = useGameStore((s) => s.loadingOlder);
+  const hasMoreEvents = useGameStore((s) => s.hasMoreEvents);
   const filter = useGameStore((s) => s.eventsFilter);
   const setFilter = useGameStore((s) => s.setEventsFilter);
   const meta = useGameStore((s) => s.meta);
   const [chars, setChars] = useState<Character[]>([]);
   const [openEventId, setOpenEventId] = useState<number | null>(null);
   const refresh = useGameStore((s) => s.refreshEvents);
+  const loadOlder = useGameStore((s) => s.loadOlderEvents);
+
+  const streamRef = useRef<HTMLDivElement>(null);
+  const pinnedBottomRef = useRef(true);   // 用户是否贴底（贴底时新事件自动滚到底）
+  const prevEventsLenRef = useRef(0);
 
   useEffect(() => {
     (async () => {
@@ -286,10 +299,41 @@ export default function EventStreamPanel() {
   }, [events, selectedCharIds]);
 
   const tickGroups = useMemo(() => groupByTick(filtered), [filtered]);
-  const tickKeys = Object.keys(tickGroups).map(Number).sort((a, b) => b - a);
+  // 聊天式：旧 tick 在上、新 tick 在下（正序）
+  const tickKeys = Object.keys(tickGroups).map(Number).sort((a, b) => a - b);
   const hasFilter = selectedCharIds.size > 0;
 
   const clearFilter = () => setFilter({ charIds: null });
+
+  // 滚动事件：触顶加载更早历史；记录是否贴底
+  const onStreamScroll = () => {
+    const el = streamRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    pinnedBottomRef.current = distanceFromBottom < 40;
+    // 触顶且非筛选模式（筛选下不分页）时加载更早
+    if (el.scrollTop < 30 && !hasFilter && hasMoreEvents && !loadingOlder) {
+      const prevHeight = el.scrollHeight;
+      void loadOlder().then(() => {
+        // 保持视觉位置：加载后把 scrollTop 恢复到新增内容之下
+        requestAnimationFrame(() => {
+          if (streamRef.current) {
+            streamRef.current.scrollTop = streamRef.current.scrollHeight - prevHeight;
+          }
+        });
+      });
+    }
+  };
+
+  // 新事件到达且用户贴底时，自动滚到底部
+  useEffect(() => {
+    const el = streamRef.current;
+    if (!el) return;
+    if (pinnedBottomRef.current && events.length > prevEventsLenRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+    prevEventsLenRef.current = events.length;
+  }, [events.length]);
 
   return (
     <div className="event-panel">
@@ -339,7 +383,7 @@ export default function EventStreamPanel() {
         </div>
       )}
 
-      <div className="event-stream">
+      <div className="event-stream" ref={streamRef} onScroll={onStreamScroll}>
         {loading && events.length === 0 ? (
           <div className="event-stream-empty">
             <span className="spinner" /> 正在加载事件…
@@ -356,27 +400,36 @@ export default function EventStreamPanel() {
             <button className="btn-secondary" onClick={clearFilter}>清除筛选</button>
           </div>
         ) : (
-          tickKeys.map((tick) => (
-            <div key={tick} className="tick-group">
-              <div className="tick-group-header">
-                <span className={`tick-badge ${tick <= 0 ? 'prologue' : ''}`}>
-                  {tick <= 0 ? '序幕' : `Tick ${tick}`}
-                </span>
-                {tick <= 0 && <span className="tick-prologue-tag">开场铺垫</span>}
-                <span className="tick-time">{tickGroups[tick][0]?.game_time ?? ''}</span>
-                <span className="tick-count">{tickGroups[tick].length} 个事件</span>
-              </div>
-              {tickGroups[tick].map((e) => (
-                <EventCard
-                  key={e.id}
-                  event={e}
-                  showRaw={filter.showRaw}
-                  highlightChars={selectedCharIds}
-                  onOpen={(id) => setOpenEventId(id)}
-                />
-              ))}
-            </div>
-          ))
+          <>
+            {loadingOlder && (
+              <div className="load-more-hint"><span className="spinner" /> 加载更早历史…</div>
+            )}
+            {tickKeys.map((tick) => {
+              // tick 内事件按 id 升序（旧在上、新在下，匹配聊天式阅读顺序）
+              const tickEvents = [...tickGroups[tick]].sort((a, b) => a.id - b.id);
+              return (
+                <div key={tick} className="tick-group">
+                  <div className="tick-group-header">
+                    <span className={`tick-badge ${tick <= 0 ? 'prologue' : ''}`}>
+                      {tick <= 0 ? '序幕' : `Tick ${tick}`}
+                    </span>
+                    {tick <= 0 && <span className="tick-prologue-tag">开场铺垫</span>}
+                    <span className="tick-time">{tickEvents[0]?.game_time ?? ''}</span>
+                    <span className="tick-count">{tickEvents.length} 个事件</span>
+                  </div>
+                  {tickEvents.map((e) => (
+                    <EventCard
+                      key={e.id}
+                      event={e}
+                      showRaw={filter.showRaw}
+                      highlightChars={selectedCharIds}
+                      onOpen={(id) => setOpenEventId(id)}
+                    />
+                  ))}
+                </div>
+              );
+            })}
+          </>
         )}
       </div>
 

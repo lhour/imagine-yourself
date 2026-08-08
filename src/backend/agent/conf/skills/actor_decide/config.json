@@ -1,6 +1,0 @@
-{
-  "default_version": "v0",
-  "description": "NPC 决策：基于记忆、任务、情境，决定本 tick 的行动",
-  "tools": ["memory_retrieve", "memory_palace", "character_quest_filter", "character_agenda_filter", "character_location_filter", "map_distance", "map_features"],
-  "params": {}
-}

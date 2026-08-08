@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from src.backend.env import BACKEND_DIR, load_backend_env
 from src.backend.storage import models
+from src.backend.storage.gameplay_defaults import get_default_gameplay_options
 
 load_backend_env()
 
@@ -44,6 +45,17 @@ SCHEMA: List[Tuple[str, List[str], List[str]]] = [
         "real_time TEXT NOT NULL",
         "description TEXT",
         "custom_attrs TEXT DEFAULT '{}'",
+        # v4 新增：三库就绪状态 + 锚点计数缓存
+        "active_anchors_count INTEGER DEFAULT 0",
+        "vector_store_ready INTEGER DEFAULT 0",
+        "graph_store_ready INTEGER DEFAULT 0",
+        # v5 新增：恒定背景（需求四）
+        "world_background_raw TEXT",
+        "world_background_polished TEXT",
+        "civilization_summary TEXT",
+        "stable_context_version INTEGER DEFAULT 0",
+        # v5 新增：玩法选项（需求一，JSON）
+        "gameplay_options TEXT DEFAULT '{}'",
     ], []),
 
     # ---------- 客观表 ----------
@@ -54,6 +66,9 @@ SCHEMA: List[Tuple[str, List[str], List[str]]] = [
         "appearance_polished TEXT",
         "personality_raw TEXT NOT NULL",
         "personality_polished TEXT",
+        # v4 新增：客观能力（武力/智力/技能）
+        "ability_raw TEXT",
+        "ability_polished TEXT",
         "gender TEXT",
         "age INTEGER",
         "status TEXT DEFAULT ''",
@@ -246,11 +261,20 @@ SCHEMA: List[Tuple[str, List[str], List[str]]] = [
         "visibility TEXT DEFAULT 'public'",
         "source_event_id INTEGER REFERENCES events(id)",
         "custom_attrs TEXT DEFAULT '{}'",
+        # v4 新增：锚点回链 + 剧情弧
+        "anchor_id INTEGER REFERENCES anchor_plots(id)",
+        "plot_arc TEXT",
+        # 10.1 新增：消息传播字段
+        "propagation_medium TEXT DEFAULT '无'",
+        "propagation_origin_map_id INTEGER",
+        "propagation_origin_group_id INTEGER",
     ], [
         "CREATE INDEX IF NOT EXISTS idx_event_tick ON events(tick_num)",
         "CREATE INDEX IF NOT EXISTS idx_event_map ON events(location_map_id)",
         "CREATE INDEX IF NOT EXISTS idx_event_type ON events(event_type)",
         "CREATE INDEX IF NOT EXISTS idx_event_importance ON events(importance)",
+        "CREATE INDEX IF NOT EXISTS idx_event_anchor ON events(anchor_id)",
+        "CREATE INDEX IF NOT EXISTS idx_event_plot_arc ON events(plot_arc)",
     ]),
 
     ("event_participants", [
@@ -274,9 +298,17 @@ SCHEMA: List[Tuple[str, List[str], List[str]]] = [
         "setting_type TEXT DEFAULT 'essential'",
         "importance INTEGER DEFAULT 3",
         "custom_attrs TEXT DEFAULT '{}'",
+        # v5 新增：追加式设定控制（决策3）
+        "source TEXT DEFAULT 'drama'",  # drama/human/model
+        "immutable INTEGER DEFAULT 0",  # 1=初始设定不可修改/删除
+        "parent_setting_id INTEGER REFERENCES settings(id)",  # 追加到哪条设定
+        "append_note TEXT",  # 追加理由/补充说明
+        "created_tick INTEGER DEFAULT 0",
     ], [
         "CREATE INDEX IF NOT EXISTS idx_setting_category ON settings(category)",
         "CREATE INDEX IF NOT EXISTS idx_setting_type ON settings(setting_type)",
+        "CREATE INDEX IF NOT EXISTS idx_setting_source ON settings(source)",
+        "CREATE INDEX IF NOT EXISTS idx_setting_immutable ON settings(immutable)",
     ]),
 
     # ---------- 主观记忆系统 ----------
@@ -296,12 +328,18 @@ SCHEMA: List[Tuple[str, List[str], List[str]]] = [
         "forget_prob REAL DEFAULT 0.0",
         "is_false INTEGER DEFAULT 0",
         "custom_attrs TEXT DEFAULT '{}'",
+        # v4 新增：精确索引维度（JSON 数组，替代 memory_index）+ 向量库回链
+        "person_ids TEXT DEFAULT '[]'",
+        "location_ids TEXT DEFAULT '[]'",
+        "emotion_tags TEXT DEFAULT '[]'",
+        "vector_id INTEGER",
     ], [
         "CREATE INDEX IF NOT EXISTS idx_mem_char ON memories(char_id)",
         "CREATE INDEX IF NOT EXISTS idx_mem_depth ON memories(char_id, depth)",
         "CREATE INDEX IF NOT EXISTS idx_mem_event ON memories(source_event_id)",
         "CREATE INDEX IF NOT EXISTS idx_mem_correct ON memories(correctness)",
         "CREATE INDEX IF NOT EXISTS idx_mem_tick ON memories(remember_tick)",
+        "CREATE INDEX IF NOT EXISTS idx_mem_vector ON memories(vector_id)",
     ]),
 
     ("memory_index", [
@@ -355,6 +393,9 @@ SCHEMA: List[Tuple[str, List[str], List[str]]] = [
         "priority INTEGER DEFAULT 3",
         "start_tick INTEGER NOT NULL",
         "estimated_ticks INTEGER",
+        # 10.2 时间模型重构：弃 tick 计数，改游戏时间计量
+        "estimated_duration_raw TEXT",
+        "deadline_game_time TEXT",
         "success_condition_raw TEXT NOT NULL",
         "fail_condition_raw TEXT",
         "assigned_by TEXT DEFAULT 'player'",
@@ -376,6 +417,9 @@ SCHEMA: List[Tuple[str, List[str], List[str]]] = [
         "priority INTEGER DEFAULT 3",
         "start_tick INTEGER NOT NULL",
         "end_tick INTEGER",
+        # 10.2 时间模型重构：纲领用游戏时间回顾，新增 dormant 休眠状态
+        "expected_span_raw TEXT",
+        "review_game_time TEXT",
         "conflict_with TEXT",
         "blocked_reason_raw TEXT",
     ], [
@@ -393,6 +437,127 @@ SCHEMA: List[Tuple[str, List[str], List[str]]] = [
     ], [
         "CREATE INDEX IF NOT EXISTS idx_qs_quest ON quest_steps(quest_id)",
     ]),
+
+    # ---------- v4 横切：锚点剧情表 ----------
+    ("anchor_plots", [
+        "id INTEGER PRIMARY KEY AUTOINCREMENT",
+        "title TEXT NOT NULL",
+        "desc_raw TEXT NOT NULL",
+        "desc_polished TEXT",
+        "inevitability INTEGER NOT NULL DEFAULT 3",  # 0-5
+        "status TEXT NOT NULL DEFAULT 'pending'",    # pending|active|fulfilled|expired|abandoned
+        "trigger_condition_raw TEXT",
+        "target_tick INTEGER",
+        "created_tick INTEGER NOT NULL",
+        "fulfilled_tick INTEGER",
+        "fulfilled_event_id INTEGER REFERENCES events(id)",
+        "created_by TEXT NOT NULL DEFAULT 'model'",  # human|model|system
+        "priority INTEGER DEFAULT 3",
+        "plot_arc TEXT",
+        "tags TEXT DEFAULT '[]'",
+        "custom_attrs TEXT DEFAULT '{}'",
+    ], [
+        "CREATE INDEX IF NOT EXISTS idx_anchor_status ON anchor_plots(status, inevitability)",
+        "CREATE INDEX IF NOT EXISTS idx_anchor_target ON anchor_plots(target_tick) WHERE status IN ('pending','active')",
+        "CREATE INDEX IF NOT EXISTS idx_anchor_arc ON anchor_plots(plot_arc)",
+        "CREATE INDEX IF NOT EXISTS idx_anchor_created_by ON anchor_plots(created_by)",
+    ]),
+
+    # ---------- v4 主观层：印象缓存表（图库 ViewsAs 边的快查镜像） ----------
+    ("character_impressions_cache", [
+        "id INTEGER PRIMARY KEY AUTOINCREMENT",
+        "observer_char_id INTEGER NOT NULL REFERENCES characters(id)",
+        "target_char_id INTEGER NOT NULL REFERENCES characters(id)",
+        "favorability INTEGER DEFAULT 50",
+        "trust INTEGER DEFAULT 50",
+        "fear INTEGER DEFAULT 0",
+        "impression_polished TEXT",
+        "last_update_tick INTEGER DEFAULT 0",
+    ], [
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ci_cache_pair ON character_impressions_cache(observer_char_id, target_char_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ci_cache_observer ON character_impressions_cache(observer_char_id)",
+    ]),
+
+    # ---------- v5 新增：操作审计日志（需求一 / 七公共基础设施） ----------
+    ("operation_log", [
+        "id INTEGER PRIMARY KEY AUTOINCREMENT",
+        "op_type TEXT NOT NULL",              # create_dynamic_entity / append_setting / web_fetch / kb_add / ...
+        "op_entity_type TEXT",                # character / group / setting / map / map_feature / item
+        "op_entity_id INTEGER",               # 操作的实体 id
+        "actor TEXT NOT NULL",                # model / human / system
+        "tool TEXT NOT NULL",                 # 调用的工具名
+        "args_json TEXT DEFAULT '{}'",        # 工具参数
+        "result_json TEXT DEFAULT '{}'",      # 工具返回结果
+        "tick_num INTEGER DEFAULT 0",
+        "game_time TEXT",
+        "created_at TEXT NOT NULL",           # ISO 时间戳
+        "success INTEGER DEFAULT 1",          # 1=成功 0=失败
+        "error_msg TEXT",
+    ], [
+        "CREATE INDEX IF NOT EXISTS idx_oplog_type ON operation_log(op_type)",
+        "CREATE INDEX IF NOT EXISTS idx_oplog_entity ON operation_log(op_entity_type, op_entity_id)",
+        "CREATE INDEX IF NOT EXISTS idx_oplog_tick ON operation_log(tick_num)",
+        "CREATE INDEX IF NOT EXISTS idx_oplog_actor ON operation_log(actor)",
+        "CREATE INDEX IF NOT EXISTS idx_oplog_time ON operation_log(created_at)",
+    ]),
+
+    # ---------- 10.3 周期事件调度（世界事件调度器，不进 ENTITIES）----------
+    ("scheduled_events", [
+        "id INTEGER PRIMARY KEY AUTOINCREMENT",
+        "title TEXT NOT NULL",
+        "desc_raw TEXT",
+        "importance INTEGER DEFAULT 3",            # 0-5，遵守项目硬约束
+        "schedule_type TEXT NOT NULL DEFAULT 'recurring'",  # recurring / one_shot
+        "recurrence_pattern TEXT",                 # daily / weekly / monthly / yearly / custom / once_at
+        "recurrence_detail_raw TEXT",              # 自然语言（"每天上午8点上课"）
+        "next_trigger_game_time TEXT",             # 下次触发游戏时间
+        "scope TEXT DEFAULT 'global'",             # character / group / global
+        "scope_target_json TEXT DEFAULT '[]'",     # 影响的角色/群体ID数组
+        "event_template_json TEXT DEFAULT '{}'",   # 触发时生成的事件模板
+        "active INTEGER DEFAULT 1",                # 是否激活
+        "trigger_condition_raw TEXT",              # 激活条件
+        "expire_condition_raw TEXT",               # 失效条件
+        "created_by TEXT DEFAULT 'drama'",         # drama / model / human
+        "created_tick INTEGER DEFAULT 0",
+        "deactivated_tick INTEGER",
+        "custom_attrs TEXT DEFAULT '{}'",
+    ], [
+        "CREATE INDEX IF NOT EXISTS idx_se_active ON scheduled_events(active, next_trigger_game_time)",
+        "CREATE INDEX IF NOT EXISTS idx_se_scope ON scheduled_events(scope)",
+    ]),
+
+    # ---------- 10.1 消息传播（定向传播触达追踪 + 媒体广播通道，不进 ENTITIES）----------
+    ("event_dissemination", [
+        "id INTEGER PRIMARY KEY AUTOINCREMENT",
+        "event_id INTEGER NOT NULL REFERENCES events(id)",
+        "target_char_id INTEGER NOT NULL REFERENCES characters(id)",
+        "status TEXT NOT NULL DEFAULT 'pending'",
+        "expected_arrival_game_time TEXT",
+        "arrived_game_time TEXT",
+        "distortion_level INTEGER DEFAULT 0",
+        "received_version_raw TEXT",
+        "source_path_json TEXT DEFAULT '[]'",
+        "hops INTEGER DEFAULT 0",
+        "created_tick INTEGER DEFAULT 0",
+        "updated_tick INTEGER DEFAULT 0",
+    ], [
+        "CREATE INDEX IF NOT EXISTS idx_ed_status ON event_dissemination(status, expected_arrival_game_time)",
+        "CREATE INDEX IF NOT EXISTS idx_ed_event ON event_dissemination(event_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ed_target ON event_dissemination(target_char_id)",
+    ]),
+
+    ("public_knowledge", [
+        "id INTEGER PRIMARY KEY AUTOINCREMENT",
+        "event_id INTEGER NOT NULL REFERENCES events(id)",
+        "published_game_time TEXT",
+        "medium TEXT",
+        "coverage_scope TEXT",
+        "version_raw TEXT",
+        "reach_tags_json TEXT DEFAULT '[]'",
+    ], [
+        "CREATE INDEX IF NOT EXISTS idx_pk_event ON public_knowledge(event_id)",
+        "CREATE INDEX IF NOT EXISTS idx_pk_medium ON public_knowledge(medium)",
+    ]),
 ]
 
 
@@ -408,11 +573,49 @@ class SaveManager:
         self.saves_dir.mkdir(parents=True, exist_ok=True)
         self.active_save: Optional[str] = None
         self._conn: Optional[sqlite3.Connection] = None
+        # v4 新增：图库/向量库激活引用
+        self._active_graph: Optional["graph_store.GraphStore"] = None
+        self._active_vector: Optional[Any] = None  # v4: VectorStore 单例
 
     # ---------- 路径 ----------
 
     def save_path(self, name: str) -> Path:
         return self.saves_dir / f"{name}.db"
+
+    @property
+    def _active_save_file(self) -> Path:
+        """持久化活跃存档名的文件（后端重启后自动恢复）。"""
+        return self.saves_dir / ".active_save"
+
+    def _persist_active(self) -> None:
+        """把当前活跃存档名写入文件，供重启后恢复。"""
+        try:
+            if self.active_save:
+                self._active_save_file.write_text(
+                    self.active_save, encoding="utf-8"
+                )
+            elif self._active_save_file.exists():
+                self._active_save_file.unlink()
+        except OSError:
+            pass  # 持久化失败不阻断主流程
+
+    def restore_active(self) -> Optional[str]:
+        """从文件恢复上次激活的存档（后端重启后调用）。
+
+        仅当存档文件仍存在时才恢复；恢复失败（如 db 损坏）时静默返回 None。
+        """
+        try:
+            if not self._active_save_file.exists():
+                return None
+            name = self._active_save_file.read_text(encoding="utf-8").strip()
+            if not name or not self.save_path(name).exists():
+                # 存档已被删除，清理残留的标记文件
+                self._active_save_file.unlink(missing_ok=True)
+                return None
+            self.switch_save(name)
+            return name
+        except Exception:
+            return None
 
     def snapshots_dir(self, name: str) -> Path:
         return self.saves_dir / f"{name}.snapshots"
@@ -443,17 +646,26 @@ class SaveManager:
             "VALUES (1, 1, ?, ?, '{}')",
             ["源石纪元1年1月1日08时00分00秒", time.strftime("%Y-%m-%d %H:%M:%S")],
         )
+        # v4: 初始化向量库虚拟表
+        self._init_vector(conn)
         conn.commit()
         conn.close()
+        # v4: 初始化图库（KuzuDB）
+        self._init_graph(p)
         self.switch_save(name)
         return name
 
     def delete_save(self, name: str) -> None:
+        p = self.save_path(name)
+        if not p.exists():
+            raise FileNotFoundError(f"存档不存在: {name}")
         if self.active_save == name:
             self.close_active()
-        p = self.save_path(name)
-        if p.exists():
-            p.unlink()
+        p.unlink()
+        # v4: 同步删除图库目录
+        kuzu_path = self.saves_dir / f"{name}.kuzu"
+        if kuzu_path.exists():
+            shutil.rmtree(kuzu_path, ignore_errors=True)
         sd = self.snapshots_dir(name)
         if sd.exists():
             shutil.rmtree(sd, ignore_errors=True)
@@ -468,6 +680,9 @@ class SaveManager:
         conn.execute("PRAGMA foreign_keys = ON")
         # 触发迁移（旧存档自动补列）
         self._init_schema(conn)
+        # v4: 确保向量库虚拟表存在并保存实例（避免后续重复 sqlite_vec.load）
+        self._active_vector = self._init_vector(conn)
+        models.set_active_vector(self._active_vector)
         # 确保元信息单例行存在
         conn.execute(
             "INSERT OR IGNORE INTO world_meta (id, tick_num, game_time, real_time, custom_attrs) "
@@ -478,14 +693,29 @@ class SaveManager:
         self._conn = conn
         self.active_save = name
         models.set_active_connection(conn)
+        # v4: 激活图库
+        self._active_graph = self._connect_graph(p)
+        models.set_active_graph(self._active_graph)
+        # 持久化活跃存档名（后端重启后自动恢复）
+        self._persist_active()
         return name
 
     def close_active(self) -> None:
         if self._conn is not None:
             self._conn.close()
             self._conn = None
-            self.active_save = None
-            models.set_active_connection(None)
+        # v4: 关闭图库
+        if self._active_graph is not None:
+            self._active_graph.close()
+            self._active_graph = None
+        # v4: 清理向量库引用（依附 conn，无需显式 close）
+        self._active_vector = None
+        self.active_save = None
+        models.set_active_connection(None)
+        models.set_active_graph(None)
+        models.set_active_vector(None)
+        # 清除持久化标记（当前无活跃存档）
+        self._persist_active()
 
     # ---------- 元信息 ----------
 
@@ -511,6 +741,10 @@ class SaveManager:
         allowed = {
             "tick_num", "game_time", "era_name", "script_name",
             "protagonist_id", "description",
+            # v5 新增：恒定背景 + 玩法选项
+            "world_background_raw", "world_background_polished",
+            "civilization_summary", "stable_context_version",
+            "gameplay_options",
         }
         sets, vals = [], []
         for k, v in fields.items():
@@ -544,6 +778,64 @@ class SaveManager:
 
     def set_protagonist(self, char_id: int) -> Dict[str, Any]:
         return self.update_meta(protagonist_id=char_id)
+
+    def get_save_meta(self, name: str) -> Dict[str, Any]:
+        """读取指定存档的元信息，不切换当前存档。"""
+        p = self.save_path(name)
+        if not p.exists():
+            raise FileNotFoundError(f"存档不存在: {name}")
+        conn = sqlite3.connect(p, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        try:
+            # 尝试运行 schema 迁移（幂等），失败时忽略
+            try:
+                self._init_schema(conn)
+            except Exception:
+                pass
+            # 确保元信息行存在
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO world_meta (id, tick_num, game_time, real_time, custom_attrs) "
+                    "VALUES (1, 1, ?, ?, '{}')",
+                    ["源石纪元1年1月1日08时00分00秒", time.strftime("%Y-%m-%d %H:%M:%S")],
+                )
+                conn.commit()
+            except Exception:
+                pass
+            row = conn.execute("SELECT * FROM world_meta WHERE id = 1").fetchone()
+            if not row:
+                return {"save": name}
+            d = dict(row)
+            if d.get("custom_attrs"):
+                try:
+                    import json as _json
+                    d["custom_attrs"] = _json.loads(d["custom_attrs"])
+                except Exception:
+                    pass
+            # 读取主角信息
+            pid = d.get("protagonist_id")
+            if pid:
+                try:
+                    char_row = conn.execute("SELECT id, name FROM characters WHERE id = ?", [pid]).fetchone()
+                    if char_row:
+                        cd = dict(char_row)
+                        d["protagonist_name"] = cd.get("name") or f"#{pid}"
+                except Exception:
+                    pass
+            d["save"] = name
+            return d
+        finally:
+            conn.close()
+
+    def get_all_saves_meta(self) -> List[Dict[str, Any]]:
+        """批量读取所有存档的元信息，不切换当前存档。"""
+        result = []
+        for name in self.list_saves():
+            try:
+                result.append(self.get_save_meta(name))
+            except Exception:
+                result.append({"save": name, "error": True})
+        return result
 
     # ---------- 快照 ----------
 
@@ -596,6 +888,139 @@ class SaveManager:
         if p.exists():
             p.unlink()
 
+    # ---------- v5: 玩法选项（gameplay_options） ----------
+
+    def get_gameplay_options(self) -> Dict[str, Any]:
+        """获取当前存档的玩法选项（含默认值合并）。"""
+        meta = self.get_meta()
+        gopts = meta.get("gameplay_options") or {}
+        import json
+        defaults = get_default_gameplay_options()
+        if isinstance(gopts, str):
+            try:
+                gopts = json.loads(gopts)
+            except Exception:
+                gopts = {}
+        merged = self._deep_merge(defaults, gopts)
+        return merged
+
+    def set_gameplay_options(self, options: Dict[str, Any]) -> Dict[str, Any]:
+        """更新玩法选项。"""
+        import json
+        self.update_meta(gameplay_options=json.dumps(options, ensure_ascii=False))
+        return self.get_gameplay_options()
+
+    def patch_gameplay_options(self, patch: Dict[str, Any]) -> Dict[str, Any]:
+        """部分更新玩法选项。"""
+        current = self.get_gameplay_options()
+        merged = self._deep_merge(current, patch)
+        return self.set_gameplay_options(merged)
+
+    @staticmethod
+    def _deep_merge(base: Dict, override: Dict) -> Dict:
+        """深度合并两个 dict：override 覆盖 base，嵌套 dict 也深合并。"""
+        import copy
+        result = copy.deepcopy(base)
+        for key, val in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(val, dict):
+                result[key] = SaveManager._deep_merge(result[key], val)
+            else:
+                result[key] = copy.deepcopy(val)
+        return result
+
+    # ---------- v5: 操作审计日志（operation_log） ----------
+
+    def log_operation(self, op_type: str, tool: str, *,
+                     op_entity_type: str = "", op_entity_id: Optional[int] = None,
+                     actor: str = "model", args: Optional[Dict] = None,
+                     result: Optional[Dict] = None, success: bool = True,
+                     error_msg: str = "") -> int:
+        """写入一条操作日志，返回新记录 id。"""
+        if not self._conn:
+            raise RuntimeError("无激活存档")
+        meta = self.get_meta()
+        import json
+        from datetime import datetime
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._conn.execute(
+            "INSERT INTO operation_log "
+            "(op_type, op_entity_type, op_entity_id, actor, tool, "
+            "args_json, result_json, tick_num, game_time, created_at, success, error_msg) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                op_type, op_entity_type, op_entity_id, actor, tool,
+                json.dumps(args or {}, ensure_ascii=False),
+                json.dumps(result or {}, ensure_ascii=False),
+                meta.get("tick_num", 0),
+                meta.get("game_time", ""),
+                created_at,
+                1 if success else 0,
+                error_msg,
+            ]
+        )
+        self._conn.commit()
+        last_id = self._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        return last_id
+
+    def query_operations(self, *,
+                         op_type: str = "", actor: str = "",
+                         op_entity_type: str = "", limit: int = 50) -> List[Dict[str, Any]]:
+        """查询操作日志，默认最近 50 条。"""
+        if not self._conn:
+            return []
+        sql = "SELECT * FROM operation_log WHERE 1=1"
+        params: List[Any] = []
+        if op_type:
+            sql += " AND op_type = ?"
+            params.append(op_type)
+        if actor:
+            sql += " AND actor = ?"
+            params.append(actor)
+        if op_entity_type:
+            sql += " AND op_entity_type = ?"
+            params.append(op_entity_type)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        rows = self._conn.execute(sql, params).fetchall()
+        result = []
+        import json
+        for row in rows:
+            d = dict(row)
+            for k in ("args_json", "result_json"):
+                if d.get(k):
+                    try:
+                        d[k] = json.loads(d[k])
+                    except Exception:
+                        pass
+            result.append(d)
+        return result
+
+    # ---------- v5: 动态实体计数（供配额检查器使用） ----------
+
+    def count_dynamic_entities(self, entity_type: str, since_tick: int = 0) -> int:
+        """统计指定实体类型自 since_tick 以来的新增数量。"""
+        if not self._conn:
+            return 0
+        sql = (
+            "SELECT COUNT(*) FROM operation_log "
+            "WHERE op_type = 'create_dynamic_entity' "
+            "AND op_entity_type = ? AND tick_num >= ? AND success = 1"
+        )
+        row = self._conn.execute(sql, [entity_type, since_tick]).fetchone()
+        return row[0] if row else 0
+
+    def count_dynamic_entities_total(self, entity_type: str) -> int:
+        """统计指定实体类型的累计新增总量。"""
+        if not self._conn:
+            return 0
+        sql = (
+            "SELECT COUNT(*) FROM operation_log "
+            "WHERE op_type = 'create_dynamic_entity' "
+            "AND op_entity_type = ? AND success = 1"
+        )
+        row = self._conn.execute(sql, [entity_type]).fetchone()
+        return row[0] if row else 0
+
     # ---------- Schema 初始化 + 迁移 ----------
 
     def _init_schema(self, conn: sqlite3.Connection) -> None:
@@ -620,6 +1045,61 @@ class SaveManager:
                     cur.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
         conn.commit()
 
+    # ---------- v4: 向量库 & 图库 初始化 ----------
+
+    def _init_vector(self, conn: sqlite3.Connection) -> Optional[Any]:
+        """幂等：初始化 sqlite-vec 虚拟表并返回 VectorStore 实例。
+
+        忽略不可用错误（旧存档无扩展时降级，返回 None）。
+        返回实例供 switch_save 保存到 _active_vector，避免后续重复 sqlite_vec.load 报错。
+        """
+        try:
+            from src.backend.storage.vector_store import VectorStore
+            vs = VectorStore(conn)
+            vs.init_database()
+            # 把三库就绪状态写回 meta
+            try:
+                conn.execute(
+                    "UPDATE world_meta SET vector_store_ready = 1 WHERE id = 1"
+                )
+                conn.commit()
+            except Exception:
+                pass
+            return vs
+        except Exception:
+            # sqlite-vec 加载失败不阻塞主流程
+            return None
+
+    def _init_graph(self, save_path: Path) -> "graph_store.GraphStore":
+        """创建新存档的图库并初始化节点/边表。返回 GraphStore。
+
+        若 kuzu 不可用则返回空壳 GraphStore，不阻塞主流程。
+        """
+        from src.backend.storage import graph_store
+        gs = graph_store.GraphStore.connect_for_save(save_path)
+        try:
+            gs.init_database()
+            try:
+                self._conn.execute(
+                    "UPDATE world_meta SET graph_store_ready = 1 WHERE id = 1"
+                )
+                self._conn.commit()
+            except Exception:
+                pass
+        except graph_store.GraphStoreUnavailable:
+            pass  # 图库不可用不阻塞
+        return gs
+
+    def _connect_graph(self, save_path: Path) -> "graph_store.GraphStore":
+        """连接现有存档的图库（若不存在则创建）。"""
+        from src.backend.storage import graph_store
+        gs = graph_store.GraphStore.connect_for_save(save_path)
+        try:
+            gs.init_database()
+        except graph_store.GraphStoreUnavailable:
+            pass
+        return gs
+
 
 # ============================================================
 # 默认单例
@@ -632,4 +1112,7 @@ def default_save_manager() -> SaveManager:
     global _default_sm
     if _default_sm is None:
         _default_sm = SaveManager()
+        # 后端重启后自动恢复上次激活的存档（从 .active_save 文件读取），
+        # 避免前端显示「当前存档 未激活」——用户无需手动重新切换。
+        _default_sm.restore_active()
     return _default_sm

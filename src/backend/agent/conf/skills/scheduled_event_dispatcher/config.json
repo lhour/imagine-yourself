@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "周期事件调度器：扫描到期周期事件，生成事件，推进下次触发时间",
+  "tools": ["scheduled_event_list", "scheduled_event_update", "scheduled_event_deactivate", "event_filter"],
+  "params": {}
+}

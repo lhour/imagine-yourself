@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "主Agent：自主决定本tick调哪些子skill、什么顺序、几次，通过工具白名单+配额+必选节点约束",
+  "tools": [],
+  "params": {}
+}

@@ -1,0 +1,15 @@
+﻿{"name": "墨渊剑", "desc_raw": "上古神剑，剑身漆黑如墨，蕴含深渊之力。苏墨然的佩剑。使用者需以心神为引，否则易被剑意反噬。", "category": "武器", "importance": 5}
+{"name": "太虚镜", "desc_raw": "能映照人心最深处的欲望与恐惧，亦能看穿幻术。秦暮雪使用的法器。", "category": "法宝", "importance": 5}
+{"name": "天机罗盘", "desc_raw": "可感知城市中强大异能者方位的法器，精度有限。天机阁标配。", "category": "辅助", "importance": 4}
+{"name": "追魂锁", "desc_raw": "锁定敌人魂魄的灵器，被锁定者短时间无法使用异能。影渊标配工具。", "category": "封印", "importance": 4}
+{"name": "屏蔽手环", "desc_raw": "佩戴后可短时间屏蔽自身异能波动，躲避感知型探测。黑市有售。", "category": "防御", "importance": 4}
+{"name": "能量饮料", "desc_raw": "异能者专用恢复剂，快速补充异能消耗。有轻微依赖性。", "category": "消耗品", "importance": 3}
+{"name": "记忆碎片", "desc_raw": "能读取他人一段记忆的透明晶体，一次性道具。", "category": "消耗品", "importance": 4}
+{"name": "契约卷轴", "desc_raw": "上古仪式道具，用于签订具有精神约束力的契约。违反者遭受反噬。", "category": "仪式", "importance": 5}
+{"name": "定位锚", "desc_raw": "小型定位装置，植入目标后持续追踪位置，覆盖整座城市。", "category": "侦查", "importance": 3}
+{"name": "无相甲", "desc_raw": "看似普通的灰色布衣，能吸收三成物理伤害。血色议会藏品。", "category": "防具", "importance": 4}
+{"name": "刻名刀", "desc_raw": "能在目标物体上留下不可消除的精神印记，用于标记或追踪。叶知秋常用。", "category": "工具", "importance": 3}
+{"name": "灵石", "desc_raw": "富含灵气的结晶，可作为修炼媒介或应急能量源。旧书市集偶有出售。", "category": "消耗品", "importance": 3}
+{"name": "影渊令牌", "desc_raw": "影渊内部身份凭证，黑色金属令牌。持令者可调动影渊资源。", "category": "身份", "importance": 4}
+{"name": "血色徽章", "desc_raw": "血色议会成员徽章，红色金底。象征纯血异能家族身份。", "category": "身份", "importance": 3}
+{"name": "天机玉牌", "desc_raw": "天机阁弟子凭证，温润白玉。持有者可在危急时刻请求天机阁庇护。", "category": "身份", "importance": 4}

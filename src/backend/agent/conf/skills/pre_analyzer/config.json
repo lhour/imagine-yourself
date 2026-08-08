@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "前置分析节点：分析场景背景、人物、锚点剧情，输出任务指令给后续角色决策",
+  "tools": ["character_filter", "character_impressions_cache_filter", "map_features", "anchor_list_active"],
+  "params": {}
+}

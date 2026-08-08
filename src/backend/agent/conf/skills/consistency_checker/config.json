@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "一致性校验器：校验coordinator产出的narrative是否与角色决策/世界状态一致",
+  "tools": ["character_filter", "event_filter"],
+  "params": {}
+}

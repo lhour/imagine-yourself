@@ -1,56 +1,67 @@
+/* ============================================================
+   QuestAgendaPanel — 商务深色主题（与 index.css 变量体系一致）
+   ============================================================ */
+
 .qa-panel {
   width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--bg-sub, #f7f8fb);
-  border-left: 1px solid var(--border, #e5e7eb);
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
 }
 .qa-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border, #e5e7eb);
-  background: var(--bg, #fff);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
 }
 .qa-tabs {
   display: flex;
   gap: 4px;
 }
 .qa-tab {
-  border: 1px solid var(--border, #e5e7eb);
-  background: #fff;
-  color: #4b5563;
-  padding: 6px 14px;
-  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  padding: 5px 14px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
+  transition: var(--transition);
 }
+.qa-tab:hover { background: var(--bg-hover); border-color: var(--border-strong); color: var(--text-secondary); }
 .qa-tab-active {
-  background: var(--primary, #2563eb);
+  background: var(--accent-blue);
   color: #fff;
-  border-color: var(--primary, #2563eb);
+  border-color: var(--accent-blue);
 }
 .qa-filter {
   flex: 1;
-  border: 1px solid var(--border, #e5e7eb);
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: #fff;
-  font-size: 13px;
+  border: 1px solid var(--border);
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12px;
   max-width: 220px;
 }
+.qa-filter:focus { border-color: var(--accent-blue); outline: none; }
 .qa-newbtns { display: flex; gap: 6px; }
 .qa-new {
-  background: var(--primary, #2563eb);
+  background: var(--accent-blue);
   color: #fff;
-  border: none;
-  padding: 6px 12px;
-  border-radius: 6px;
+  border: 1px solid var(--accent-blue);
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 600;
+  transition: var(--transition);
 }
+.qa-new:hover { background: var(--accent-blue-hover); border-color: var(--accent-blue-hover); }
 .qa-list {
   flex: 1;
   overflow-y: auto;
@@ -60,27 +71,29 @@
   gap: 10px;
 }
 .qa-empty {
-  color: #94a3b8;
+  color: var(--text-faint);
   font-size: 13px;
   text-align: center;
   padding: 40px 10px;
 }
 .qa-card {
-  background: #fff;
-  border: 1px solid var(--border, #e5e7eb);
-  border-left: 4px solid var(--border, #e5e7eb);
-  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border-strong);
+  border-radius: var(--radius-sm);
   padding: 10px 12px;
-  box-shadow: 0 1px 2px rgba(0,0,0,.02);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+  transition: var(--transition);
 }
-.qa-card-status-open { border-left-color: #3b82f6; }
-.qa-card-status-in_progress { border-left-color: #f59e0b; }
-.qa-card-status-done { border-left-color: #10b981; opacity: .85; }
-.qa-card-status-failed { border-left-color: #ef4444; }
-.qa-card-status-blocked { border-left-color: #94a3b8; }
+.qa-card:hover { border-color: var(--border-strong); }
+.qa-card-status-open { border-left-color: var(--accent-blue); }
+.qa-card-status-in_progress { border-left-color: var(--warning); }
+.qa-card-status-done { border-left-color: var(--success); opacity: .8; }
+.qa-card-status-failed { border-left-color: var(--danger); }
+.qa-card-status-blocked { border-left-color: var(--text-muted); }
 .qa-card-agenda { border-left-width: 0; border-top: 4px solid; }
-.qa-card-agenda.qa-card-status-active { border-top-color: #10b981; }
-.qa-card-agenda.qa-card-status-blocked { border-top-color: #f59e0b; }
+.qa-card-agenda.qa-card-status-active { border-top-color: var(--success); }
+.qa-card-agenda.qa-card-status-blocked { border-top-color: var(--warning); }
 .qa-card-top {
   display: flex;
   align-items: center;
@@ -89,59 +102,63 @@
 }
 .qa-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 .qa-ctype {
-  background: #eef2ff;
-  color: #4338ca;
+  background: var(--accent-blue-soft);
+  color: var(--accent-blue);
   font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  font-weight: 600;
 }
-.qa-title { font-weight: 600; color: #111827; flex: 1; font-size: 14px; }
+.qa-title { font-weight: 600; color: var(--text-primary); flex: 1; font-size: 14px; }
 .qa-prio {
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--warning-soft);
+  color: var(--warning);
   font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
   font-weight: 600;
 }
 .qa-card-meta {
   display: flex;
   gap: 10px;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-muted);
   margin-bottom: 6px;
   flex-wrap: wrap;
 }
-.qa-char { font-weight: 500; color: #1f2937; }
+.qa-char { font-weight: 500; color: var(--text-secondary); }
 .qa-status {
-  background: #f1f5f9;
+  background: var(--bg-elevated);
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   text-transform: lowercase;
+  color: var(--text-muted);
 }
 .qa-card-body {
   font-size: 13px;
-  color: #374151;
+  color: var(--text-secondary);
   line-height: 1.55;
   white-space: pre-wrap;
 }
 .qa-card-cond {
   margin-top: 8px;
   font-size: 12px;
-  color: #475569;
-  background: #f8fafc;
-  border-radius: 6px;
+  color: var(--text-muted);
+  background: var(--bg-inset);
+  border-radius: var(--radius-sm);
   padding: 6px 8px;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-.qa-blocked b { color: #b45309; }
+.qa-blocked b { color: var(--warning); }
 
+/* === Modal（任务/纲领编辑弹窗） === */
 .modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.45);
+  background: rgba(6, 8, 12, 0.72);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -152,28 +169,34 @@
   max-width: 92vw;
   max-height: 86vh;
   overflow-y: auto;
-  background: #fff;
-  border-radius: 10px;
-  padding: 18px 22px;
-  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.25);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  box-shadow: var(--shadow-lg);
 }
-.modal-body h3 { margin: 0 0 14px; color: #0f172a; }
+.modal-body h3 { margin: 0 0 14px; color: var(--text-primary); font-size: 16px; }
 .modal-form { display: flex; flex-direction: column; gap: 10px; }
 .modal-form label {
   display: flex;
   flex-direction: column;
   gap: 4px;
   font-size: 13px;
-  color: #334155;
+  color: var(--text-secondary);
 }
-.modal-form label > span { font-weight: 500; color: #1e293b; }
+.modal-form label > span { font-weight: 500; color: var(--text-primary); }
 .modal-form input, .modal-form select, .modal-form textarea {
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
   font-size: 13px;
-  background: #fff;
+  background: var(--bg-input);
+  color: var(--text-primary);
   font-family: inherit;
+}
+.modal-form input:focus, .modal-form select:focus, .modal-form textarea:focus {
+  border-color: var(--accent-blue);
+  outline: none;
 }
 .modal-form textarea { resize: vertical; min-height: 40px; }
 .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -184,17 +207,21 @@
   margin-top: 6px;
 }
 .modal-actions button {
-  border: 1px solid #cbd5e1;
-  background: #fff;
-  color: #0f172a;
-  padding: 6px 14px;
-  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  padding: 7px 16px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 13px;
+  transition: var(--transition);
 }
+.modal-actions button:hover { background: var(--bg-hover); border-color: var(--border-focus); }
 .modal-actions button[type="submit"] {
-  background: var(--primary, #2563eb);
+  background: var(--accent-blue);
   color: #fff;
-  border-color: var(--primary, #2563eb);
+  border-color: var(--accent-blue);
+  font-weight: 600;
 }
-.modal-actions button:disabled { opacity: .6; cursor: not-allowed; }
+.modal-actions button[type="submit"]:hover { background: var(--accent-blue-hover); border-color: var(--accent-blue-hover); }
+.modal-actions button:disabled { opacity: .5; cursor: not-allowed; }

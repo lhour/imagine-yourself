@@ -6,17 +6,26 @@
 - 长期（1-100 年）：年度摘要，3-7 个里程碑
 - 超长期（100-10000 年）：朝代级，3-5 个里程碑
 - 纪元级（10000+ 年）：宇宙级
+
+10.5 批量结算：跨越期不逐 tick 模拟，而是批量结算：
+- 周期事件汇总（常规→1条摘要，偏离→单独event）
+- 消息传播批量触达（跨越期内 pending→arrived）
+- 任务/纲领推进（按 game_time 判断到期）
+- 锚点检查（跨越后强制检查）
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List
 
 from src.backend.agent.pipeline import _build_variables, call_skill
 from src.backend.service import world_service
 from src.backend.storage import models
 from src.backend.storage.connection import default_save_manager
+
+logger = logging.getLogger(__name__)
 
 
 # 跨度分层
@@ -98,6 +107,15 @@ def time_jump(
         state_changes = parsed.get("state_changes", {})
         _apply_state_changes(state_changes)
 
+    # Step 5: 10.5 批量结算
+    settlement = _batch_settle(
+        jump_result["from_time"],
+        jump_result["to_time"],
+        seconds,
+        span_type,
+        events_created,
+    )
+
     return {
         **jump_result,
         "span_type": span_type,
@@ -107,7 +125,174 @@ def time_jump(
         "milestone_count": len(events_created),
         "mock_mode": summarizer_result.get("mock", False),
         "usage": summarizer_result.get("usage"),
+        "settlement": settlement,
     }
+
+
+def _batch_settle(
+    from_time: str,
+    to_time: str,
+    seconds: int,
+    span_type: str,
+    events_created: List[int],
+) -> Dict[str, Any]:
+    """10.5 批量结算：周期事件汇总 + 传播批量结算 + 任务/纲领推进 + 锚点检查。"""
+    from src.backend.service.game_time_utils import compare as gt_compare, parse_game_time, add as gt_add, Duration, format_game_time
+
+    sm = default_save_manager()
+    meta = sm.get_meta()
+    tick_num = meta.get("tick_num", 0)
+
+    result: Dict[str, Any] = {
+        "routine_events_summarized": 0,
+        "propagation_settled": 0,
+        "quests_failed": 0,
+        "quests_completed": 0,
+        "agendas_reviewed": 0,
+        "anchors_checked": 0,
+    }
+
+    # 1. 周期事件汇总：常规周期事件 → 1 条摘要事件
+    try:
+        scheduled = models.ScheduledEvent.list(
+            where="active = 1 AND schedule_type = 'recurring'", limit=200
+        )
+        routine_count = len(scheduled)
+        if routine_count > 0:
+            # 生成 1 条"这段时间的日常节律"摘要事件
+            summary_content = f"在 {from_time} 至 {to_time} 期间，{routine_count} 项日常周期事件照常进行（上课、集日、作息等），无异常。"
+            try:
+                ev = world_service.create_event(
+                    event_type="routine_summary",
+                    content_raw=summary_content,
+                    content_polished=summary_content,
+                    importance=1,
+                    custom_attrs={"time_jump_routine": True, "routine_count": routine_count},
+                )
+                events_created.append(ev["id"])
+                result["routine_events_summarized"] = routine_count
+            except Exception as ex:
+                logger.warning("周期事件摘要生成失败: %s", ex)
+
+            # 推进所有常规周期事件的 next_trigger_game_time 到跨越后
+            to_gt = parse_game_time(to_time)
+            if to_gt:
+                for se in scheduled:
+                    try:
+                        # 简化：直接把 next_trigger 推进到终点时间之后
+                        # （精确推进应按 recurrence_pattern 多次推进，但跨越期批量结算只需保证下次在终点之后）
+                        cur_next = se.next_trigger_game_time or ""
+                        if cur_next:
+                            cmp = gt_compare(cur_next, to_time)
+                            if cmp is not None and cmp < 0:
+                                models.ScheduledEvent.update(
+                                    se.id, next_trigger_game_time=to_time
+                                )
+                    except Exception:
+                        pass
+    except Exception as ex:
+        logger.warning("周期事件汇总失败: %s", ex)
+
+    # 2. 消息传播批量结算：所有 pending 且 expected_arrival <= to_time → arrived
+    try:
+        pending = models.EventDissemination.list(
+            where="status = 'pending'", limit=2000
+        )
+        settled = 0
+        for ed in pending:
+            expected = ed.expected_arrival_game_time or ""
+            if not expected:
+                continue
+            cmp = gt_compare(expected, to_time)
+            if cmp is not None and cmp <= 0:
+                # 跨越期内必然触达，批量标记 arrived
+                try:
+                    models.EventDissemination.update(
+                        ed.id,
+                        status="arrived",
+                        arrived_game_time=expected,
+                        updated_tick=tick_num,
+                    )
+                    settled += 1
+                except Exception:
+                    pass
+        result["propagation_settled"] = settled
+    except Exception as ex:
+        logger.warning("传播批量结算失败: %s", ex)
+
+    # 3. 任务/纲领推进
+    # 3a. 任务：deadline_game_time <= to_time 且未完成 → failed
+    try:
+        active_quests = models.CharacterQuest.list(
+            where="status IN ('in_progress', 'planned')", limit=500
+        )
+        for q in active_quests:
+            deadline = q.deadline_game_time or ""
+            if not deadline:
+                continue
+            cmp = gt_compare(deadline, to_time)
+            if cmp is not None and cmp <= 0:
+                try:
+                    models.CharacterQuest.update(
+                        q.id, status="terminated",
+                        blocked_reason_raw=f"时间跨越至 {to_time}，任务超期未完成",
+                    )
+                    result["quests_failed"] += 1
+                except Exception:
+                    pass
+    except Exception as ex:
+        logger.warning("任务推进失败: %s", ex)
+
+    # 3b. 纲领：review_game_time <= to_time → 推进回顾时间到跨越后
+    try:
+        active_agendas = models.CharacterAgenda.list(
+            where="status = 'active'", limit=500
+        )
+        for a in active_agendas:
+            review = a.review_game_time or ""
+            if not review:
+                continue
+            cmp = gt_compare(review, to_time)
+            if cmp is not None and cmp <= 0:
+                # 跨越多个回顾点的纲领合并为一次回顾评估
+                # 简化：推进 review_game_time 到跨越后，标记需回顾
+                try:
+                    models.CharacterAgenda.update(
+                        a.id, review_game_time=to_time,
+                        custom_attrs={"needs_review_after_jump": True},
+                    )
+                    result["agendas_reviewed"] += 1
+                except Exception:
+                    pass
+    except Exception as ex:
+        logger.warning("纲领推进失败: %s", ex)
+
+    # 4. 锚点检查：跨越后强制检查
+    try:
+        anchors = models.AnchorPlot.list(
+            where="status IN ('pending', 'active')", limit=100
+        )
+        checked = 0
+        for anchor in anchors:
+            # target_tick 过期的锚点标记 expired
+            if anchor.target_tick and tick_num >= anchor.target_tick:
+                try:
+                    models.AnchorPlot.update(anchor.id, status="expired")
+                    checked += 1
+                except Exception:
+                    pass
+            # inevitability >= 3 的 pending 锚点自动激活
+            elif anchor.status == "pending" and anchor.inevitability >= 3:
+                try:
+                    models.AnchorPlot.update(anchor.id, status="active")
+                    checked += 1
+                except Exception:
+                    pass
+        result["anchors_checked"] = checked
+    except Exception as ex:
+        logger.warning("锚点检查失败: %s", ex)
+
+    return result
 
 
 def _apply_state_changes(changes: Dict[str, Any]) -> None:

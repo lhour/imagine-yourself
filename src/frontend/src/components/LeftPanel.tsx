@@ -1,9 +1,19 @@
 import { useEffect, useState } from 'react';
 import { useGameStore } from '../store/gameStore';
-import { savesApi, configApi } from '../api/client';
+import { savesApi, configApi, v5Api } from '../api/client';
 
 interface SnapshotItem {
   name: string;
+}
+
+interface GameplayOptions {
+  player_sexuality: string;
+  death_likelihood: number;
+  favorability_bias: number;
+  luck_bias: number;
+  challenge_bias: number;
+  writing_style: string;
+  world_modify_allowed: boolean;
 }
 
 function snapshotName(s: unknown): string {
@@ -16,6 +26,36 @@ const POLISH_MODE_OPTS = [
   { v: 'short', label: '短润色' },
   { v: 'long', label: '长润色' },
 ] as const;
+
+const DEFAULT_GAMEPLAY: GameplayOptions = {
+  player_sexuality: '异主角',
+  death_likelihood: 3,
+  favorability_bias: 0,
+  luck_bias: 0,
+  challenge_bias: 0,
+  writing_style: '直白',
+  world_modify_allowed: false,
+};
+
+const SEXUALITY_OPTS = ['男', '女', '同主角', '异主角'];
+const WRITING_STYLE_OPTS = ['直白', '隐晦', '写意', '克制'];
+const BIAS_OPTS = [
+  { v: -5, label: '极端(-5)' },
+  { v: -3, label: '较低(-3)' },
+  { v: -1, label: '略低(-1)' },
+  { v: 0, label: '中性(0)' },
+  { v: 1, label: '略高(1)' },
+  { v: 3, label: '较高(3)' },
+  { v: 5, label: '极端(5)' },
+];
+const DEATH_OPTS = [
+  { v: 0, label: '几乎不会死' },
+  { v: 1, label: '很少死亡' },
+  { v: 2, label: '偶发死亡' },
+  { v: 3, label: '正常概率' },
+  { v: 4, label: '较频繁' },
+  { v: 5, label: '频繁且残酷' },
+];
 
 export default function LeftPanel() {
   const meta = useGameStore((s) => s.meta);
@@ -32,6 +72,10 @@ export default function LeftPanel() {
   const [cfg, setCfg] = useState<{
     polish_mode?: string;
   }>({});
+
+  const [gameplayOpen, setGameplayOpen] = useState(false);
+  const [gameplay, setGameplay] = useState<GameplayOptions>(DEFAULT_GAMEPLAY);
+  const [gameplayLoading, setGameplayLoading] = useState(false);
 
   const loadSnapshots = async () => {
     try {
@@ -52,9 +96,23 @@ export default function LeftPanel() {
     } catch { /* ignore */ }
   };
 
+  const loadGameplay = async () => {
+    if (!activeSave) return;
+    setGameplayLoading(true);
+    try {
+      const r = await v5Api.getGameplayOptions();
+      const opts = { ...DEFAULT_GAMEPLAY, ...r.gameplay_options } as GameplayOptions;
+      setGameplay(opts);
+    } catch { /* ignore */ }
+    finally {
+      setGameplayLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (activeSave) {
       loadSnapshots();
+      loadGameplay();
     } else {
       setSnapshots([]);
     }
@@ -72,6 +130,19 @@ export default function LeftPanel() {
       setNotification('设置已更新');
     } catch (e) {
       setError(`保存设置失败：${(e as Error).message}`);
+    }
+  };
+
+  const patchGameplay = async (patch: Partial<GameplayOptions>) => {
+    try {
+      const full = { ...gameplay, ...patch };
+      const result = await v5Api.setGameplayOptions(full);
+      if (result.gameplay_options) {
+        setGameplay(result.gameplay_options as GameplayOptions);
+      }
+      setNotification('玩法配置已更新');
+    } catch (e) {
+      setError(`保存玩法配置失败：${(e as Error).message}`);
     }
   };
 
@@ -104,8 +175,8 @@ export default function LeftPanel() {
   const createSnapshot = async () => {
     try {
       const r = await savesApi.createSnapshot();
-      setNotification(`快照已创建：${(r as { created?: string }).created ?? ''}`);
       await loadSnapshots();
+      setNotification(`快照已创建：${(r as { created?: string }).created ?? ''}`);
     } catch (e) {
       setError(`快照失败：${(e as Error).message}`);
     }
@@ -115,9 +186,9 @@ export default function LeftPanel() {
     if (!confirm(`确认回滚到快照「${name}」？当前进度将被覆盖。`)) return;
     try {
       await savesApi.restoreSnapshot(name);
-      setNotification('快照已回滚');
       await refreshAll();
       await loadSnapshots();
+      setNotification('快照已回滚');
     } catch (e) {
       setError(`回滚失败：${(e as Error).message}`);
     }
@@ -127,8 +198,8 @@ export default function LeftPanel() {
     if (!confirm(`确认删除快照「${name}」？`)) return;
     try {
       await savesApi.deleteSnapshot(name);
-      setNotification('快照已删除');
       await loadSnapshots();
+      setNotification('快照已删除');
     } catch (e) {
       setError(`删除失败：${(e as Error).message}`);
     }
@@ -185,6 +256,109 @@ export default function LeftPanel() {
             ))}
           </select>
         </div>
+      </div>
+
+      <div className="panel-section">
+        <div className="panel-title" style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => setGameplayOpen(!gameplayOpen)}>
+          <span>🎮 玩法配置</span>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{gameplayOpen ? '▼' : '▶'}</span>
+        </div>
+        {gameplayOpen && (
+          gameplayLoading ? (
+            <div className="panel-empty">加载中...</div>
+          ) : (
+            <>
+              <div className="field-row field-col">
+                <label>主角性取向</label>
+                <select
+                  value={gameplay.player_sexuality}
+                  onChange={(e) => void patchGameplay({ player_sexuality: e.target.value })}
+                  disabled={!activeSave}
+                >
+                  {SEXUALITY_OPTS.map((v) => (
+                    <option key={v} value={v}>{v}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="field-row field-col">
+                <label>叙事笔法</label>
+                <select
+                  value={gameplay.writing_style}
+                  onChange={(e) => void patchGameplay({ writing_style: e.target.value })}
+                  disabled={!activeSave}
+                >
+                  {WRITING_STYLE_OPTS.map((v) => (
+                    <option key={v} value={v}>{v}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="field-row field-col">
+                <label>死亡概率</label>
+                <select
+                  value={gameplay.death_likelihood}
+                  onChange={(e) => void patchGameplay({ death_likelihood: Number(e.target.value) })}
+                  disabled={!activeSave}
+                >
+                  {DEATH_OPTS.map((o) => (
+                    <option key={o.v} value={o.v}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="field-row field-col">
+                <label>好感度倾向</label>
+                <select
+                  value={gameplay.favorability_bias}
+                  onChange={(e) => void patchGameplay({ favorability_bias: Number(e.target.value) })}
+                  disabled={!activeSave}
+                >
+                  {BIAS_OPTS.map((o) => (
+                    <option key={o.v} value={o.v}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="field-row field-col">
+                <label>运气倾向</label>
+                <select
+                  value={gameplay.luck_bias}
+                  onChange={(e) => void patchGameplay({ luck_bias: Number(e.target.value) })}
+                  disabled={!activeSave}
+                >
+                  {BIAS_OPTS.map((o) => (
+                    <option key={o.v} value={o.v}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="field-row field-col">
+                <label>挑战倾向</label>
+                <select
+                  value={gameplay.challenge_bias}
+                  onChange={(e) => void patchGameplay({ challenge_bias: Number(e.target.value) })}
+                  disabled={!activeSave}
+                >
+                  {BIAS_OPTS.map((o) => (
+                    <option key={o.v} value={o.v}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="field-row field-col">
+                <label>允许模型追加设定</label>
+                <select
+                  value={gameplay.world_modify_allowed ? 'true' : 'false'}
+                  onChange={(e) => void patchGameplay({ world_modify_allowed: e.target.value === 'true' })}
+                  disabled={!activeSave}
+                >
+                  <option value="false">禁止（只读）</option>
+                  <option value="true">允许追加</option>
+                </select>
+              </div>
+              {!activeSave && (
+                <div className="panel-empty" style={{ marginTop: 8, fontSize: 12 }}>
+                  请先激活存档
+                </div>
+              )}
+            </>
+          )
+        )}
       </div>
 
       <div className="panel-section">

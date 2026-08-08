@@ -89,21 +89,26 @@ def test_list_skills_endpoint(client, save_with_data):
     r = client.get("/api/agent/skills")
     assert r.status_code == 200
     data = r.json()
-    assert data["count"] >= 20
+    assert data["count"] >= 18
     names = [s["name"] for s in data["items"]]
-    assert "actor_decide" in names
+    # D1 修订：actor_decide/world_react v1 已删，统一用 v2
+    assert "actor_decide_v2" in names
+    assert "world_react_v2" in names
     assert "time_skip_summarizer" in names
     assert "memory_encoder" in names
     assert "player_action" in names
-    # 润色已重构为独立 skill：风格选择 + 各风格 polisher
+    # 润色已整合为单一 event_polisher skill（风格由 polish_style 变量指定）
     assert "polish_style_selector" in names
-    assert "polisher_default" in names
-    assert "polisher_poetic" in names
+    assert "event_polisher" in names
+    # C 阶段新增 skill
+    assert "tick_orchestrator" in names
+    assert "consistency_checker" in names
+    assert "anchor_check" in names
 
 
 def test_get_skill_version(client, save_with_data):
     client.post(f"/api/saves/{save_with_data}/switch")
-    r = client.get("/api/agent/skills/actor_decide/versions/v0")
+    r = client.get("/api/agent/skills/actor_decide_v2/versions/v0")
     assert r.status_code == 200
     sp = r.json()["system_prompt"]
     assert "actor_decide" in sp
@@ -112,7 +117,7 @@ def test_get_skill_version(client, save_with_data):
 
 def test_render_skill_endpoint(client, save_with_data):
     client.post(f"/api/saves/{save_with_data}/switch")
-    r = client.get("/api/agent/skills/actor_decide/render")
+    r = client.get("/api/agent/skills/actor_decide_v2/render")
     assert r.status_code == 200
     rendered = r.json()["rendered"]
     # role_name / game_time / tick_num 来自存档元信息，应被替换
@@ -130,9 +135,10 @@ def test_list_tools_endpoint(client, save_with_data):
     assert r.status_code == 200
     data = r.json()
     assert data["count"] >= 100
-    assert "character_filter" in data["tools"]
-    assert "memory_retrieve" in data["tools"]
-    assert "map_distance" in data["tools"]
+    tool_names = [t["name"] for t in data["tools"]]
+    assert "character_filter" in tool_names, f"character_filter not in {tool_names[:20]}... total={data['count']}"
+    assert "memory_retrieve" in tool_names
+    assert "map_distance" in tool_names
 
 
 def test_get_variables(client, save_with_data):
@@ -150,7 +156,11 @@ def test_get_variables(client, save_with_data):
 # ============================================================
 
 def test_tick_pipeline_mock(client, save_with_data):
-    """完整 tick 管线（mock 模式）应能跑通。"""
+    """完整 tick 管线（mock 模式）应能跑通。
+
+    C 阶段后 /api/agent/tick 走 orchestrator（v4 + 编排层），
+    trace 结构与 v3 不同：保留 advance_tick / actor_decide / coordinator 等核心节点。
+    """
     client.post(f"/api/saves/{save_with_data}/switch")
     r = client.post("/api/agent/tick", json={"seconds": 60, "max_actors": 3})
     assert r.status_code == 200, r.text
@@ -158,16 +168,19 @@ def test_tick_pipeline_mock(client, save_with_data):
     assert data["tick"] == 2  # 推进 1 tick
     assert "源石纪元" in data["game_time"]
     assert data["mock_mode"] is True
-    # 至少完成 7 步 trace
+    # orchestrator 应返回 orchestration 摘要
+    assert data.get("orchestrated") is True
+    orch = data.get("orchestration", {})
+    assert "probability_events" in orch
+    assert "plan" in orch
+    assert "reflection" in orch
+    assert "anchor_check" in orch
+    # v4 五节点 trace
     steps = [t["name"] for t in data["trace"]]
     assert "advance_tick" in steps
-    assert "memory_decay" in steps
-    assert "quest_monitor" in steps
-    assert "agenda_monitor" in steps
-    assert "actor_decide" in steps
-    assert "world_react" in steps
-    assert "memory_encode" in steps
-    assert "event_polisher" in steps
+    assert "actor_decide" in steps  # v4 step name 仍为 actor_decide
+    assert "coordinator" in steps
+    assert "character_updater" in steps
 
 
 def test_time_jump_pipeline_mock(client, save_with_data):
@@ -184,13 +197,13 @@ def test_time_jump_pipeline_mock(client, save_with_data):
 def test_call_skill_endpoint(client, save_with_data):
     """直接调 skill。"""
     client.post(f"/api/saves/{save_with_data}/switch")
-    r = client.post("/api/agent/skills/polisher_default/call", json={
-        "skill_name": "polisher_default",
+    r = client.post("/api/agent/skills/event_polisher/call", json={
+        "skill_name": "event_polisher",
         "user_prompt": "事件 raw：小红亲了小明\n请润色。",
     })
     assert r.status_code == 200
     data = r.json()
-    assert data["skill"] == "polisher_default"
+    assert data["skill"] == "event_polisher"
     assert data["mock"] is True
     assert data["content"]  # 应有 mock 返回
 
@@ -202,10 +215,10 @@ def test_call_skill_endpoint(client, save_with_data):
 def test_list_skill_versions_endpoint(client, save_with_data):
     """列出某 skill 的所有版本。"""
     client.post(f"/api/saves/{save_with_data}/switch")
-    r = client.get("/api/agent/skills/actor_decide/versions")
+    r = client.get("/api/agent/skills/actor_decide_v2/versions")
     assert r.status_code == 200
     data = r.json()
-    assert data["name"] == "actor_decide"
+    assert data["name"] == "actor_decide_v2"
     assert "v0" in data["versions"]
     assert data["count"] >= 1
 
@@ -213,10 +226,10 @@ def test_list_skill_versions_endpoint(client, save_with_data):
 def test_get_skill_version_detail_endpoint(client, save_with_data):
     """取某版本详情。"""
     client.post(f"/api/saves/{save_with_data}/switch")
-    r = client.get("/api/agent/skills/actor_decide/versions/v0")
+    r = client.get("/api/agent/skills/actor_decide_v2/versions/v0")
     assert r.status_code == 200
     data = r.json()
-    assert data["name"] == "actor_decide"
+    assert data["name"] == "actor_decide_v2"
     assert data["version"] == "v0"
     # API 字段名为 system_prompt（保留 LLM 通用术语），skill_md 为文件字段名
     assert "actor_decide" in data["system_prompt"]
@@ -226,14 +239,14 @@ def test_get_skill_version_detail_endpoint(client, save_with_data):
 def test_get_skill_version_not_found(client, save_with_data):
     """取不存在的版本应返回 404。"""
     client.post(f"/api/saves/{save_with_data}/switch")
-    r = client.get("/api/agent/skills/actor_decide/versions/v99")
+    r = client.get("/api/agent/skills/actor_decide_v2/versions/v99")
     assert r.status_code == 404
 
 
 def test_create_update_setactive_skill_version(client, save_with_data):
     """端到端（文件存储）：创建 v1 → 更新内容 → 设为激活 → 验证 → 清理。"""
     client.post(f"/api/saves/{save_with_data}/switch")
-    name = "actor_decide"
+    name = "actor_decide_v2"
     v1_dir = SKILLS_DIR / name / "v1"
     config_path = SKILLS_DIR / name / "config.json"
 

@@ -1,9 +1,69 @@
+/* ============================================================
+   Aether Story Engine — 全局基础样式
+   商务深色主题：深蓝灰底 + 琥珀金强调 + 精致边框/阴影
+   ============================================================ */
+
 :root {
+  /* === 字体 === */
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
   color-scheme: dark;
-  color: #e6e1d8;
-  background: #0a0a0a;
   font-size: 14px;
+  line-height: 1.5;
+
+  /* === 色彩体系（商务深蓝金） === */
+  --bg-base: #0b0e14;
+  --bg-page: #0d1117;
+  --bg-panel: #12161f;
+  --bg-card: #161b26;
+  --bg-elevated: #1b212e;
+  --bg-hover: #1f2634;
+  --bg-active: #242d3d;
+  --bg-input: #0c0f16;
+  --bg-inset: #0a0c12;
+
+  --border-subtle: #1e2430;
+  --border: #262e3d;
+  --border-strong: #344050;
+  --border-focus: #3b6fd4;
+
+  --text-primary: #e8eaf0;
+  --text-secondary: #b0b8c8;
+  --text-muted: #7c8698;
+  --text-faint: #545d6e;
+
+  --accent: #c9a35c;
+  --accent-hover: #d8b66e;
+  --accent-soft: rgba(201, 163, 92, 0.12);
+  --accent-blue: #4a7bd4;
+  --accent-blue-hover: #5d8be0;
+  --accent-blue-soft: rgba(74, 123, 212, 0.14);
+
+  --success: #3fb984;
+  --success-soft: rgba(63, 185, 132, 0.12);
+  --warning: #e0a545;
+  --warning-soft: rgba(224, 165, 69, 0.12);
+  --danger: #dc6060;
+  --danger-soft: rgba(220, 96, 96, 0.12);
+  --info: #4a9fd1;
+  --info-soft: rgba(74, 159, 209, 0.12);
+
+  /* === 尺寸 === */
+  --radius: 10px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
+  --radius-xs: 4px;
+
+  /* === 阴影 === */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.38);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 0 1px rgba(74, 123, 212, 0.3), 0 4px 16px rgba(74, 123, 212, 0.15);
+
+  /* === 过渡 === */
+  --transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+
+  color: var(--text-primary);
+  background: var(--bg-base);
 }
 
 * {
@@ -18,36 +78,60 @@ html, body, #root {
   overflow: hidden;
 }
 
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* === 全局按钮 === */
 button {
   font-family: inherit;
   cursor: pointer;
-  padding: 6px 12px;
-  border: 1px solid #3a3a3a;
-  background: #1c1c1c;
-  color: #e6e1d8;
-  border-radius: 4px;
-  transition: all 0.15s;
+  padding: 8px 15px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 500;
+  transition: var(--transition);
+  white-space: nowrap;
 }
 
 button:hover {
-  background: #2a2a2a;
-  border-color: #5a5a5a;
+  background: var(--bg-hover);
+  border-color: var(--border-focus);
+}
+
+button:active {
+  transform: translateY(1px);
 }
 
 button.primary {
-  background: #4a78d8;
-  border-color: #4a78d8;
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
   color: white;
+  font-weight: 600;
 }
 
 button.primary:hover {
-  background: #5a88e8;
+  background: var(--accent-blue-hover);
+  border-color: var(--accent-blue-hover);
+  box-shadow: 0 2px 8px rgba(74, 123, 212, 0.35);
 }
 
 button.danger {
-  background: #c84a4a;
-  border-color: #c84a4a;
+  background: var(--danger);
+  border-color: var(--danger);
   color: white;
+  font-weight: 600;
+}
+
+button.danger:hover {
+  background: #e87070;
+  border-color: #e87070;
 }
 
 button:disabled {
@@ -55,36 +139,58 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* === 全局表单控件 === */
 input, textarea, select {
   font-family: inherit;
-  padding: 6px 8px;
-  border: 1px solid #3a3a3a;
-  background: #1c1c1c;
-  color: #e6e1d8;
-  border-radius: 4px;
-  font-size: 13px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  transition: var(--transition);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--text-faint);
+}
+
+input:hover, textarea:hover, select:hover {
+  border-color: var(--border-focus);
 }
 
 input:focus, textarea:focus, select:focus {
   outline: none;
-  border-color: #4a78d8;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px rgba(74, 123, 212, 0.15);
 }
 
-/* Scrollbar */
+/* === 滚动条 === */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #1a1a1a;
+  background: var(--bg-page);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #3a3a3a;
-  border-radius: 4px;
+  background: var(--border-strong);
+  border-radius: 5px;
+  border: 2px solid var(--bg-page);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #4a4a4a;
+  background: #4a5670;
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--bg-page);
+}
+
+/* === 选中文本 === */
+::selection {
+  background: rgba(74, 123, 212, 0.3);
+  color: var(--text-primary);
 }

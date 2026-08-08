@@ -76,7 +76,7 @@ def test_create_save_and_slugs(client):
     r = client.get("/api/entities/_slugs")
     assert r.status_code == 200
     data = r.json()
-    assert data["count"] == 19
+    assert data["count"] == 20
     assert "character" in data["slugs"]
     assert "map_feature" in data["slugs"]
     assert "memory" in data["slugs"]

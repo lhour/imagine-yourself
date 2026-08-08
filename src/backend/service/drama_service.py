@@ -97,6 +97,52 @@ def _importance_clamp(v: Any) -> int:
     return max(0, min(5, n))
 
 
+# ---------- 剧本级玩法配置 ----------
+
+def get_drama_gameplay_options(drama_name: str) -> Dict[str, Any]:
+    """读取剧本的玩法配置（不存在则返回默认值）。"""
+    from src.backend.storage.gameplay_defaults import get_default_gameplay_options
+    drama_path = DRAMA_DIR / drama_name
+    if not drama_path.is_dir():
+        raise FileNotFoundError(f"剧本 {drama_name} 不存在")
+    opts_file = drama_path / "gameplay_options.json"
+    defaults = get_default_gameplay_options()
+    if opts_file.is_file():
+        try:
+            raw = json.loads(opts_file.read_text(encoding="utf-8-sig"))
+            return _deep_merge_dict(defaults, raw)
+        except Exception:
+            return defaults
+    return defaults
+
+
+def save_drama_gameplay_options(drama_name: str, options: Dict[str, Any]) -> Dict[str, Any]:
+    """保存剧本的玩法配置。"""
+    drama_path = DRAMA_DIR / drama_name
+    if not drama_path.is_dir():
+        raise FileNotFoundError(f"剧本 {drama_name} 不存在")
+    opts_file = drama_path / "gameplay_options.json"
+    defaults = get_default_gameplay_options()
+    merged = _deep_merge_dict(defaults, options)
+    opts_file.write_text(
+        json.dumps(merged, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    return merged
+
+
+def _deep_merge_dict(base: Dict, override: Dict) -> Dict:
+    """深度合并两个 dict：override 覆盖 base，嵌套 dict 也深合并。"""
+    import copy
+    result = copy.deepcopy(base)
+    for key, val in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
+            result[key] = _deep_merge_dict(result[key], val)
+        else:
+            result[key] = copy.deepcopy(val)
+    return result
+
+
 # ============================================================
 # 公开 API：扫描 / 详情 / 预览
 # ============================================================
@@ -866,7 +912,7 @@ def init_drama(
                 )
     stats["events"] = len(events_rows)
 
-    # ---------- 14. world_meta ----------
+    # ---------- 14. world_meta + 继承剧本玩法配置 ----------
     protagonist_name_default = meta.get("protagonist_name_default")
     protag_id = None
     if protagonist_name_default and protagonist_name_default in char_name_to_id:
@@ -876,15 +922,39 @@ def init_drama(
     if events_rows:
         max_tick = max(int(r.get("tick_num", 0)) for r in events_rows)
         start_tick = max(start_tick, max_tick)
-    sm.update_meta(
-        tick_num=start_tick,
-        game_time=meta.get("start_game_time") or "",
-        era_name=meta.get("era_name"),
-        script_name=name,
-        protagonist_id=protag_id,
-        real_time=_now_real_time(),
-        description=meta.get("description") or meta.get("summary_raw"),
-    )
+
+    # 继承剧本级玩法配置到存档
+    try:
+        drama_gopts = get_drama_gameplay_options(name)
+        import json
+        sm.update_meta(
+            tick_num=start_tick,
+            game_time=meta.get("start_game_time") or "",
+            era_name=meta.get("era_name"),
+            script_name=name,
+            protagonist_id=protag_id,
+            real_time=_now_real_time(),
+            description=meta.get("description") or meta.get("summary_raw"),
+            world_background_raw=meta.get("world_background_raw"),
+            world_background_polished=meta.get("world_background_polished"),
+            civilization_summary=meta.get("civilization_summary"),
+            stable_context_version=meta.get("stable_context_version", 1),
+            gameplay_options=json.dumps(drama_gopts, ensure_ascii=False),
+        )
+    except Exception:
+        sm.update_meta(
+            tick_num=start_tick,
+            game_time=meta.get("start_game_time") or "",
+            era_name=meta.get("era_name"),
+            script_name=name,
+            protagonist_id=protag_id,
+            real_time=_now_real_time(),
+            description=meta.get("description") or meta.get("summary_raw"),
+            world_background_raw=meta.get("world_background_raw"),
+            world_background_polished=meta.get("world_background_polished"),
+            civilization_summary=meta.get("civilization_summary"),
+            stable_context_version=meta.get("stable_context_version", 1),
+        )
     stats["protagonist"] = protagonist_name_default if protag_id else None
     stats["start_tick"] = start_tick
 

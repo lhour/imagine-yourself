@@ -2,12 +2,12 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 const NAV_ITEMS = [
   { path: '/', label: '首页', icon: '🏠' },
-  { path: '/saves', label: '存档', icon: '📂' },
+  { path: '/saves', label: '回忆', icon: '📂' },
   { path: '/dramas', label: '剧本', icon: '📜' },
+  { path: '/knowledge', label: '知识库', icon: '📚' },
   { path: '/model', label: '模型', icon: '🤖' },
   { path: '/traces', label: '日志', icon: '📊' },
   { path: '/settings', label: '设置', icon: '⚙' },
-  { path: '/play', label: '游戏', icon: '🎮' },
 ];
 
 export default function AdminNav() {
@@ -20,7 +20,7 @@ export default function AdminNav() {
       <div className="admin-nav-inner">
         <div className="admin-nav-brand" onClick={() => navigate('/')}>
           <span className="brand-icon">✦</span>
-          <span className="brand-text">设身处地 v3</span>
+          <span className="brand-text">Aether Story Engine</span>
         </div>
         <ul className="admin-nav-list">
           {NAV_ITEMS.map((item) => {

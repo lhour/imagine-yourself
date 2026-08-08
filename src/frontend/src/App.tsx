@@ -8,7 +8,14 @@ import DramasPage from './pages/DramasPage';
 import ModelPage from './pages/ModelPage';
 import SettingsPage from './pages/SettingsPage';
 import RequestLogPage from './pages/RequestLogPage';
+import GameplayOptionsPage from './pages/GameplayOptionsPage';
+import OperationLogPage from './pages/OperationLogPage';
+import KnowledgePage from './pages/KnowledgePage';
+import WorldSchedulePage from './pages/WorldSchedulePage';
 import './App.css';
+import './pages/GameplayOptionsPage.css';
+import './pages/OperationLogPage.css';
+import './pages/KnowledgePage.css';
 
 function App() {
   const error = useGameStore((s) => s.error);
@@ -16,10 +23,13 @@ function App() {
   const setError = useGameStore((s) => s.setError);
   const setNotification = useGameStore((s) => s.setNotification);
   const refreshSaves = useGameStore((s) => s.refreshSaves);
+  const checkActiveSave = useGameStore((s) => s.checkActiveSave);
 
   useEffect(() => {
     refreshSaves();
-  }, [refreshSaves]);
+    // 后端重启后会自动恢复活跃存档，前端启动时同步状态
+    void checkActiveSave();
+  }, [refreshSaves, checkActiveSave]);
 
   useEffect(() => {
     if (error) {
@@ -46,6 +56,10 @@ function App() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/traces" element={<RequestLogPage />} />
           <Route path="/trace" element={<Navigate to="/traces" replace />} />
+          <Route path="/gameplay" element={<GameplayOptionsPage />} />
+          <Route path="/world-schedule" element={<WorldSchedulePage />} />
+          <Route path="/operations" element={<OperationLogPage />} />
+          <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/play" element={<GamePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -9,6 +9,7 @@ import {
   MapRecord,
   SaveInfo,
   TickResponse,
+  TickTraceStep,
   TimeJumpResponse,
 } from '../api/types';
 import { savesApi, worldApi, agentApi, entitiesApi } from '../api/client';
@@ -41,7 +42,7 @@ export const TIME_JUMP_PRESETS: Record<string, { seconds: number; label: string;
   '10000y':{ seconds: 86400 * 365 * 10000, label: '10000 年', confirm: '将跨越 10000 年' },
 };
 
-export type RightPanelTab = 'characters' | 'groups' | 'items' | 'maps' | 'memory';
+export type RightPanelTab = 'characters' | 'groups' | 'items' | 'maps' | 'memory' | 'anchors';
 
 // 底部「下一 Tick」单位预设：单位 → 秒数倍率 + 可选项
 export const TICK_UNITS: Record<'second' | 'minute' | 'hour', { factor: number; label: string; options: number[] }> = {
@@ -75,10 +76,15 @@ interface GameState {
   lastTickResult: TickResponse | null;
   lastTimeJumpResult: TimeJumpResponse | null;
   isProcessing: boolean;
+  /** E4: 本 tick 关注角色数（max_actors），可由 BottomBar 滑杆调节 */
+  maxActors: number;
 
   // 事件流
   events: EventRecord[];
   eventsLoading: boolean;
+  eventsTotal: number;          // 后端事件总数（首页加载时计算）
+  hasMoreEvents: boolean;       // 是否还有更早历史可向上加载
+  loadingOlder: boolean;        // 正在向上加载历史
   eventsFilter: {
     participantCharId: number | null;
     eventType: string;
@@ -105,11 +111,16 @@ interface GameState {
 
   // Actions
   refreshSaves: () => Promise<void>;
+  /** 启动时检查后端是否有已激活的存档（后端重启后自动恢复），有则同步前端状态 */
+  checkActiveSave: () => Promise<void>;
   createSave: (name: string) => Promise<void>;
   switchSave: (name: string) => Promise<void>;
   deleteSave: (name: string) => Promise<void>;
+  clearActiveSave: () => void;
   refreshMeta: () => Promise<void>;
   refreshEvents: () => Promise<void>;
+  /** 向上加载更早的事件历史（基于最旧事件 id 游标分页） */
+  loadOlderEvents: () => Promise<void>;
   refreshCharacters: () => Promise<void>;
   refreshGroups: () => Promise<void>;
   refreshItems: () => Promise<void>;
@@ -120,6 +131,7 @@ interface GameState {
   setAutoSpeed: (speed: AutoSpeed) => void;
   startAutoTick: () => void;
   stopAutoTick: () => void;
+  setMaxActors: (n: number) => void;
   runTickOnce: (seconds: number, playerAction?: string) => Promise<void>;
   runTimeJump: (seconds: number) => Promise<void>;
   runAdvance: (seconds: number, opts?: { player_action?: string }) => Promise<void>;
@@ -144,9 +156,13 @@ export const useGameStore = create<GameState>((set, get) => ({
   lastTickResult: null,
   lastTimeJumpResult: null,
   isProcessing: false,
+  maxActors: 5,
 
   events: [],
   eventsLoading: false,
+  eventsTotal: 0,
+  hasMoreEvents: false,
+  loadingOlder: false,
   eventsFilter: {
     participantCharId: null,
     eventType: '',
@@ -177,6 +193,20 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
   },
 
+  checkActiveSave: async () => {
+    // 后端重启后会从 .active_save 文件自动恢复活跃存档；
+    // 前端启动时调此方法同步状态，避免 LeftPanel 显示「未激活」。
+    try {
+      const active = await savesApi.getActive();
+      if (active && get().activeSave !== active) {
+        set({ activeSave: active });
+        await get().refreshAll();
+      }
+    } catch {
+      // 后端无活跃存档或请求失败时静默——用户可手动切换
+    }
+  },
+
   createSave: async (name) => {
     try {
       await savesApi.create(name);
@@ -204,13 +234,17 @@ export const useGameStore = create<GameState>((set, get) => ({
     try {
       await savesApi.delete(name);
       if (get().activeSave === name) {
-        set({ activeSave: null, meta: null, events: [], characters: [] });
+        get().clearActiveSave();
       }
       await get().refreshSaves();
       set({ notification: `存档「${name}」已删除` });
     } catch (e) {
       set({ error: `删除存档失败：${(e as Error).message}` });
     }
+  },
+
+  clearActiveSave: () => {
+    set({ activeSave: null, meta: null, events: [], eventsTotal: 0, hasMoreEvents: false, loadingOlder: false, characters: [] });
   },
 
   refreshMeta: async () => {
@@ -229,9 +263,42 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({ eventsLoading: true });
     try {
       const data = await worldApi.events({ limit: 100 });
-      set({ events: data.items ?? [], eventsLoading: false });
+      const items = data.items ?? [];
+      const total = typeof data.total === 'number' ? data.total : items.length;
+      set({
+        events: items,
+        eventsTotal: total,
+        hasMoreEvents: items.length < total,
+        eventsLoading: false,
+      });
     } catch (e) {
       set({ eventsLoading: false, error: `加载事件失败：${(e as Error).message}` });
+    }
+  },
+
+  loadOlderEvents: async () => {
+    const { events, loadingOlder, hasMoreEvents } = get();
+    if (loadingOlder || !hasMoreEvents || events.length === 0) return;
+    // 最旧事件 id 作游标（events 来自后端 DESC，末尾即最旧）
+    const oldestId = events.reduce((min, e) => (e.id < min ? e.id : min), events[0].id);
+    set({ loadingOlder: true });
+    try {
+      const data = await worldApi.events({ limit: 100, before_id: oldestId });
+      const older = data.items ?? [];
+      if (older.length === 0) {
+        set({ hasMoreEvents: false, loadingOlder: false });
+        return;
+      }
+      // 后端返回 DESC，reverse 后按 id 升序 prepend 到现有列表前
+      const olderAsc = [...older].reverse();
+      set((s) => ({
+        events: [...olderAsc, ...s.events],
+        loadingOlder: false,
+        // 游标分页时后端不返回 total，沿用首页 total 判断是否继续
+        hasMoreEvents: older.length >= 100,
+      }));
+    } catch (e) {
+      set({ loadingOlder: false, error: `加载历史失败：${(e as Error).message}` });
     }
   },
 
@@ -315,17 +382,53 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
   },
 
+  setMaxActors: (n) => {
+    // 限制在 1-12 之间
+    const clamped = Math.max(1, Math.min(12, Math.floor(n)));
+    set({ maxActors: clamped });
+  },
+
   runTickOnce: async (seconds, playerAction) => {
     if (get().isProcessing) return;
     set({ isProcessing: true });
     try {
-      const result = await agentApi.tick(seconds, 5, playerAction);
+      const maxActors = get().maxActors;
+      const result = await agentApi.tick(seconds, maxActors, playerAction);
       set({ lastTickResult: result });
       await get().refreshMeta();
       await get().refreshEvents();
-      if (result.mock_mode) {
-        set({ notification: `Tick ${result.tick} 完成（mock 模式）` });
+      // E3: 主观线反馈通知——把 orchestration 摘要里的关键指标拼进通知
+      const notes: string[] = [];
+      if (result.mock_mode) notes.push('mock 模式');
+      const orch = result.orchestration;
+      if (orch) {
+        // 记忆生成数（character_updater 步骤）
+        const charStep = result.trace?.find((t: TickTraceStep) => t.name === 'character_updater') as
+          | { new_memories?: number }
+          | undefined;
+        if (charStep?.new_memories) notes.push(`记忆 +${charStep.new_memories}`);
+        // 锚点推进
+        const ac = orch.anchor_check;
+        if (ac?.fulfilled?.length) notes.push(`锚点推进 ${ac.fulfilled.length}`);
+        if (ac?.expired?.length) notes.push(`锚点过期 ${ac.expired.length}`);
+        // 信息传播
+        const propStep = result.trace?.find((t: TickTraceStep) => t.name === 'rumor_propagator') as
+          | { arrived?: number; dissemination_created?: number }
+          | undefined;
+        if (propStep?.arrived) notes.push(`传播触达 ${propStep.arrived}`);
+        else if (propStep?.dissemination_created) notes.push(`新建传播 ${propStep.dissemination_created}`);
+        // 印象变化（character_updater skill_calls）
+        const charStepFull = result.trace?.find((t: TickTraceStep) => t.name === 'character_updater') as
+          | { skill_calls?: number }
+          | undefined;
+        if (charStepFull?.skill_calls) notes.push(`印象更新 ${charStepFull.skill_calls}`);
+        // 反思重写
+        if (result.narrative_rewritten) notes.push('narrative 已反思重写');
+        // 概率事件触发
+        if (orch.probability_events?.sampled) notes.push(`突发[${orch.probability_events.triggers?.join('/') ?? ''}]`);
       }
+      const suffix = notes.length ? `（${notes.join(' / ')}）` : '';
+      set({ notification: `Tick ${result.tick} 完成${suffix}` });
     } catch (e) {
       set({ error: `Tick 失败：${(e as Error).message}` });
     } finally {

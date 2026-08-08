@@ -43,6 +43,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 # ============================================================
 
 _ACTIVE_CONN: Optional[sqlite3.Connection] = None
+_ACTIVE_GRAPH: Optional[Any] = None  # v4: GraphStore 单例
+_ACTIVE_VECTOR: Optional[Any] = None  # v4: VectorStore 单例
 
 
 def set_active_connection(conn: Optional[sqlite3.Connection]) -> None:
@@ -51,10 +53,32 @@ def set_active_connection(conn: Optional[sqlite3.Connection]) -> None:
     _ACTIVE_CONN = conn
 
 
+def set_active_graph(graph: Optional[Any]) -> None:
+    """v4: 由 SaveManager.switch_save 注入当前激活存档的图库。"""
+    global _ACTIVE_GRAPH
+    _ACTIVE_GRAPH = graph
+
+
+def set_active_vector(vs: Optional[Any]) -> None:
+    """v4: 由 SaveManager.switch_save 注入当前激活存档的向量库实例。"""
+    global _ACTIVE_VECTOR
+    _ACTIVE_VECTOR = vs
+
+
 def _conn() -> sqlite3.Connection:
     if _ACTIVE_CONN is None:
         raise RuntimeError("无激活存档；请先 create_save / switch_save")
     return _ACTIVE_CONN
+
+
+def graph() -> Optional[Any]:
+    """v4: 获取当前激活的图库；未就绪时返回 None。"""
+    return _ACTIVE_GRAPH
+
+
+def vector() -> Optional[Any]:
+    """v4: 获取当前激活的向量库实例；未就绪时返回 None。"""
+    return _ACTIVE_VECTOR
 
 
 # ============================================================
@@ -280,6 +304,9 @@ class Character(BaseEntity):
         ("appearance_polished", "appearance_polished", False),
         ("personality_raw", "personality_raw", False),
         ("personality_polished", "personality_polished", False),
+        # v4 新增：客观能力（武力/智力/技能），从 custom_attrs 提升
+        ("ability_raw", "ability_raw", False),
+        ("ability_polished", "ability_polished", False),
         ("gender", "gender", False),
         ("age", "age", False),
         ("status", "status", False),
@@ -468,6 +495,13 @@ class Event(BaseEntity):
         ("visibility", "visibility", False),
         ("source_event_id", "source_event_id", False),
         ("custom_attrs", "custom_attrs", True),
+        # v4 新增：锚点回链（若本事件实现了某锚点）+ 剧情弧
+        ("anchor_id", "anchor_id", False),
+        ("plot_arc", "plot_arc", False),
+        # 10.1 新增：消息传播字段
+        ("propagation_medium", "propagation_medium", False),
+        ("propagation_origin_map_id", "propagation_origin_map_id", False),
+        ("propagation_origin_group_id", "propagation_origin_group_id", False),
     ]
 
 
@@ -502,7 +536,11 @@ class Setting(BaseEntity):
 # ============================================================
 
 class Memory(BaseEntity):
-    """角色记忆基本表：深度/正确性/视角偏差/遗忘概率。"""
+    """角色记忆基本表：深度/正确性/视角偏差/遗忘概率。
+
+    v4 新增 person_ids/location_ids/emotion_tags/vector_id：
+    取代旧 memory_index 倒排（精确索引走 JSON 数组，语义召回走向量库）。
+    """
     TABLE = "memories"
     SLUG = "memory"
     FIELDS = [
@@ -520,6 +558,12 @@ class Memory(BaseEntity):
         ("forget_prob", "forget_prob", False),
         ("is_false", "is_false", False),
         ("custom_attrs", "custom_attrs", True),
+        # v4 新增：精确索引维度（JSON 数组，替代 memory_index）
+        ("person_ids", "person_ids", True),
+        ("location_ids", "location_ids", True),
+        ("emotion_tags", "emotion_tags", True),
+        # v4 新增：向量库回链（vec_memories 虚拟表 rowid）
+        ("vector_id", "vector_id", False),
     ]
 
 
@@ -571,6 +615,11 @@ class CharacterImpression(BaseEntity):
 # ============================================================
 
 class CharacterQuest(BaseEntity):
+    """角色任务（短期，最长几天）。
+
+    10.2 时间模型重构：estimated_ticks 弃用（tick 长度不等无法表达"几天"），
+    改用 estimated_duration_raw（自然语言时长）+ deadline_game_time（截止游戏时间点）。
+    """
     TABLE = "character_quests"
     SLUG = "character_quest"
     FIELDS = [
@@ -583,6 +632,9 @@ class CharacterQuest(BaseEntity):
         ("priority", "priority", False),
         ("start_tick", "start_tick", False),
         ("estimated_ticks", "estimated_ticks", False),
+        # 10.2：自然语言时长（"约3天"/"半天"/"数小时"）+ 截止游戏时间点
+        ("estimated_duration_raw", "estimated_duration_raw", False),
+        ("deadline_game_time", "deadline_game_time", False),
         ("success_condition_raw", "success_condition_raw", False),
         ("fail_condition_raw", "fail_condition_raw", False),
         ("assigned_by", "assigned_by", False),
@@ -594,7 +646,12 @@ class CharacterQuest(BaseEntity):
 
 
 class CharacterAgenda(BaseEntity):
-    """角色行动纲领：长期行为准则，被阻碍才中断。"""
+    """角色行动纲领：长期追求（几个月到几年）。
+
+    10.2 时间模型重构：end_tick 弃用（纲领不该有硬结束 tick），
+    改用 expected_span_raw（预期跨度）+ review_game_time（下次回顾游戏时间点）。
+    status 新增 dormant（休眠，等触发条件唤醒）。
+    """
     TABLE = "character_agendas"
     SLUG = "character_agenda"
     FIELDS = [
@@ -606,6 +663,9 @@ class CharacterAgenda(BaseEntity):
         ("priority", "priority", False),
         ("start_tick", "start_tick", False),
         ("end_tick", "end_tick", False),
+        # 10.2：预期跨度（"半年"/"数年"/"终身"）+ 下次回顾游戏时间点
+        ("expected_span_raw", "expected_span_raw", False),
+        ("review_game_time", "review_game_time", False),
         ("conflict_with", "conflict_with", False),
         ("blocked_reason_raw", "blocked_reason_raw", False),
     ]
@@ -622,6 +682,133 @@ class QuestStep(BaseEntity):
         ("status", "status", False),
         ("done_tick", "done_tick", False),
         ("condition_raw", "condition_raw", False),
+    ]
+
+
+# ============================================================
+# v4 横切：锚点剧情表
+# ============================================================
+
+class AnchorPlot(BaseEntity):
+    """锚点剧情表（v4 新增核心）。
+
+    人工/模型可随时写入「希望未来发生的剧情」，引导或强制模型实现指定走向。
+    inevitability 0-5：0=纯引导灵感，1-2=软引导，3-4=强引导，5=硬约束(必须实现)。
+    status 生命周期：pending → active → fulfilled | expired | abandoned。
+    """
+    TABLE = "anchor_plots"
+    SLUG = "anchor_plot"
+    FIELDS = [
+        ("title", "title", False),
+        ("desc_raw", "desc_raw", False),
+        ("desc_polished", "desc_polished", False),
+        ("inevitability", "inevitability", False),
+        ("status", "status", False),
+        ("trigger_condition_raw", "trigger_condition_raw", False),
+        ("target_tick", "target_tick", False),
+        ("created_tick", "created_tick", False),
+        ("fulfilled_tick", "fulfilled_tick", False),
+        ("fulfilled_event_id", "fulfilled_event_id", False),
+        ("created_by", "created_by", False),
+        ("priority", "priority", False),
+        ("plot_arc", "plot_arc", False),
+        ("tags", "tags", True),
+        ("custom_attrs", "custom_attrs", True),
+    ]
+
+
+# ============================================================
+# v4 主观层：印象缓存表（图库 ViewsAs 边的快查镜像）
+# ============================================================
+
+class CharacterImpressionsCache(BaseEntity):
+    """A 对 B 的顶层印象缓存（v4 新增）。
+
+    作为图库 ViewsAs 边的关系库快查镜像（双写）：写图库边时同步 upsert 本表，
+    读路径优先读本表，缺失/stale 时回退图库。取代旧 character_impressions 表。
+    """
+    TABLE = "character_impressions_cache"
+    SLUG = "character_impressions_cache"
+    FIELDS = [
+        ("observer_char_id", "observer_char_id", False),
+        ("target_char_id", "target_char_id", False),
+        ("favorability", "favorability", False),
+        ("trust", "trust", False),
+        ("fear", "fear", False),
+        ("impression_polished", "impression_polished", False),
+        ("last_update_tick", "last_update_tick", False),
+    ]
+
+
+class ScheduledEvent(BaseEntity):
+    """周期/计划事件调度表（10.3 新增，不进 ENTITIES）。
+
+    世界事件调度器：上课、火山喷发、媒体报道等周期/突发性事件。
+    schedule_type: recurring（周期）/ one_shot（一次性）
+    recurrence_pattern: daily / weekly / monthly / yearly / custom / once_at
+    active: 是否激活（放假关上课、火山喷发后关火山活动）
+    """
+    TABLE = "scheduled_events"
+    SLUG = "scheduled_event"
+    FIELDS = [
+        ("title", "title", False),
+        ("desc_raw", "desc_raw", False),
+        ("importance", "importance", False),
+        ("schedule_type", "schedule_type", False),
+        ("recurrence_pattern", "recurrence_pattern", False),
+        ("recurrence_detail_raw", "recurrence_detail_raw", False),
+        ("next_trigger_game_time", "next_trigger_game_time", False),
+        ("scope", "scope", False),
+        ("scope_target_json", "scope_target_json", True),
+        ("event_template_json", "event_template_json", True),
+        ("active", "active", False),
+        ("trigger_condition_raw", "trigger_condition_raw", False),
+        ("expire_condition_raw", "expire_condition_raw", False),
+        ("created_by", "created_by", False),
+        ("created_tick", "created_tick", False),
+        ("deactivated_tick", "deactivated_tick", False),
+        ("custom_attrs", "custom_attrs", True),
+    ]
+
+
+class EventDissemination(BaseEntity):
+    """定向传播触达追踪表（10.1 新增，不进 ENTITIES）。
+
+    承载口头/书信/电话/网络等定向传播的触达追踪。
+    status: pending / arrived / distorted / lost
+    """
+    TABLE = "event_dissemination"
+    SLUG = "event_dissemination"
+    FIELDS = [
+        ("event_id", "event_id", False),
+        ("target_char_id", "target_char_id", False),
+        ("status", "status", False),
+        ("expected_arrival_game_time", "expected_arrival_game_time", False),
+        ("arrived_game_time", "arrived_game_time", False),
+        ("distortion_level", "distortion_level", False),
+        ("received_version_raw", "received_version_raw", False),
+        ("source_path_json", "source_path_json", True),
+        ("hops", "hops", False),
+        ("created_tick", "created_tick", False),
+        ("updated_tick", "updated_tick", False),
+    ]
+
+
+class PublicKnowledge(BaseEntity):
+    """媒体报道广播通道表（10.1 新增，不进 ENTITIES）。
+
+    媒体报道/官方公告等广播式传播，不预建 per-char 记录。
+    角色是否获知由 actor_decide 时按 reach_tags 动态判断。
+    """
+    TABLE = "public_knowledge"
+    SLUG = "public_knowledge"
+    FIELDS = [
+        ("event_id", "event_id", False),
+        ("published_game_time", "published_game_time", False),
+        ("medium", "medium", False),
+        ("coverage_scope", "coverage_scope", False),
+        ("version_raw", "version_raw", False),
+        ("reach_tags_json", "reach_tags_json", True),
     ]
 
 
@@ -644,7 +831,7 @@ ENTITIES: List[type] = [
     Event,
     EventParticipant,
     Setting,
-    # 主观记忆系统（4）
+    # 主观记忆系统（4，v4: MemoryIndex/MemoryLink/CharacterImpression 计划废弃迁图库，暂保留兼容）
     Memory,
     MemoryIndex,
     MemoryLink,
@@ -653,6 +840,9 @@ ENTITIES: List[type] = [
     CharacterQuest,
     CharacterAgenda,
     QuestStep,
+    # v4 横切：锚点剧情表（阶段 A 通用 CRUD，阶段 B 换专用 anchor_tools）
+    AnchorPlot,
+    # v4 主观层：character_impressions_cache 不入注册表（避免通用 CRUD 破坏图库一致性，走专用双写）
 ]
 
 # slug → model 映射

@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "v2 角色决策：支持反应式决策（可声明 dependency 等待他人动作）",
+  "tools": ["memory_retrieve", "memory_palace", "graph_views_as", "character_quest_filter", "character_agenda_filter", "character_location_filter", "map_distance", "map_features"],
+  "params": {}
+}

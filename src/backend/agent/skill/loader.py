@@ -239,3 +239,77 @@ def delete_skill_version(name: str, version: str) -> Dict[str, Any]:
     shutil.rmtree(str(fs.versions[version].version_dir), ignore_errors=True)
     _clear_cache(name)
     return {"name": name, "deleted_version": version}
+
+
+# ============================================================
+# Skill 整体 CRUD（新增/删除 skill、修改 config.json 元信息）
+# ============================================================
+
+def create_skill(
+    name: str,
+    description: str = "",
+    tools: Optional[List[str]] = None,
+    params: Optional[Dict[str, Any]] = None,
+    skill_md: str = "",
+) -> Dict[str, Any]:
+    """新建一个完整 skill（目录 + config.json + v0/skill.md）。"""
+    if not name or not name.replace("_", "").isalnum():
+        raise ValueError(f"非法 skill 名 {name!r}")
+    target_dir = SKILLS_DIR / name
+    if target_dir.exists():
+        raise FileExistsError(f"skill {name} 已存在")
+    target_dir.mkdir(parents=True)
+    v0_dir = target_dir / "v0"
+    v0_dir.mkdir()
+    (v0_dir / "skill.md").write_text(skill_md or "", encoding="utf-8")
+    config = {
+        "default_version": "v0",
+        "description": description,
+        "tools": tools or [],
+        "params": params or {},
+    }
+    (target_dir / "config.json").write_text(
+        json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    _clear_cache()
+    return {"name": name, "created": True}
+
+
+def delete_skill(name: str) -> Dict[str, Any]:
+    """删除整个 skill 目录。"""
+    fs = get_skill(name)
+    if not fs:
+        raise FileNotFoundError(f"skill {name} 不存在")
+    shutil.rmtree(str(fs.skill_dir), ignore_errors=True)
+    _clear_cache()
+    return {"name": name, "deleted": True}
+
+
+def update_skill_config(
+    name: str,
+    description: Optional[str] = None,
+    tools: Optional[List[str]] = None,
+    params: Optional[Dict[str, Any]] = None,
+    default_version: Optional[str] = None,
+) -> Dict[str, Any]:
+    """更新 skill 的 config.json 元信息。"""
+    fs = get_skill(name)
+    if not fs:
+        raise FileNotFoundError(f"skill {name} 不存在")
+    config = fs.config.copy()
+    if description is not None:
+        config["description"] = description
+    if tools is not None:
+        config["tools"] = tools
+    if params is not None:
+        config["params"] = params
+    if default_version is not None:
+        if default_version not in fs.versions:
+            raise FileNotFoundError(f"版本 {default_version} 不存在")
+        config["default_version"] = default_version
+    config_path = fs.skill_dir / "config.json"
+    config_path.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    _clear_cache(name)
+    return {"name": name, "updated": True, "config": config}

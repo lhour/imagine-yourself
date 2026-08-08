@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.backend.env import load_backend_env
 from src.backend.http.routers import (
-    agent, character_profiles, config, dramas, entities, groups, maps, memory, saves, traces, world
+    agent, anchors, character_profiles, config, dramas, entities, groups, knowledge, maps, memory, propagation, saves, scheduled_events, traces, v5, world
 )
 
 load_backend_env()
@@ -13,8 +13,8 @@ load_backend_env()
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="imagine-yourself v3",
-        description="都市异能叙事游戏后端 — 数据库简化重构版",
+        title="Aether Story Engine",
+        description="AI 驱动的叙事游戏引擎后端 — 数据库简化重构版",
         version="3.0.0",
     )
 
@@ -36,9 +36,15 @@ def create_app() -> FastAPI:
     app.include_router(maps.router)
     app.include_router(groups.router)
     app.include_router(world.router)
+    app.include_router(anchors.router)
+    app.include_router(scheduled_events.router)
+    app.include_router(propagation.router)
     app.include_router(dramas.router)
     app.include_router(agent.router)
     app.include_router(traces.router)
+    # v5 新功能路由
+    app.include_router(v5.router)
+    app.include_router(knowledge.router)
 
     @app.get("/api/health", tags=["system"])
     def health():

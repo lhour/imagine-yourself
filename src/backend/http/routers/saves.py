@@ -34,6 +34,13 @@ def list_saves(sm: SaveManager = Depends(get_save_manager)):
     return {"saves": sm.list_saves()}
 
 
+@router.get("/batch-meta")
+def batch_saves_meta(sm: SaveManager = Depends(get_save_manager)):
+    """批量获取所有存档的元信息（不切换当前存档）。"""
+    metas = sm.get_all_saves_meta()
+    return {"metas": metas}
+
+
 @router.post("")
 def create_save(req: CreateSaveReq, sm: SaveManager = Depends(get_save_manager)):
     try:

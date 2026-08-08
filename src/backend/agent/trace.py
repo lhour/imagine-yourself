@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import datetime as _dt
+import glob
 import json
 import os
 import threading
@@ -34,7 +36,27 @@ LOG_DIR = Path(os.environ.get("LOG_DIR", "logs"))
 if not LOG_DIR.is_absolute():
     LOG_DIR = BACKEND_DIR.parent.parent / LOG_DIR
 
-TRACES_FILE = LOG_DIR / "traces.jsonl"
+
+def _traces_file_for(date: Optional[_dt.date] = None) -> Path:
+    """返回指定日期对应的 trace 文件路径（YYYYMMDD 命名）。"""
+    if date is None:
+        date = _dt.date.today()
+    return LOG_DIR / f"traces_{date.strftime('%Y%m%d')}.jsonl"
+
+
+def _current_traces_file() -> Path:
+    """返回今天的 trace 文件路径。"""
+    return _traces_file_for()
+
+
+def _all_traces_files() -> List[Path]:
+    """列出所有日期的 trace 文件（按日期升序）。"""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    return sorted(LOG_DIR.glob("traces_*.jsonl"))
+
+
+# 兼容旧代码：TRACES_FILE 指向今天的文件
+TRACES_FILE = _current_traces_file()
 
 # 当前活动 span（线程隔离；每个线程各自持有自己的 _current）
 _current: contextvars.ContextVar[Optional["Span"]] = contextvars.ContextVar(
@@ -231,29 +253,47 @@ def _safe_str(e: Exception) -> str:
     return f"{type(e).__name__}: {e}"
 
 
-def capture_context() -> contextvars.Context:
-    """捕获当前 ContextVar 上下文，用于在并发线程中传播。
+def capture_context() -> Dict[str, Any]:
+    """捕获当前 ContextVar 上下文快照（字典形式，避免 Context.run 重入报错）。
 
     用法：
         ctx = trace.capture_context()
-        future = executor.submit(lambda: trace.restore_context(ctx) or do_work())
+        future = executor.submit(trace.run_in_context, ctx, do_work, arg1)
     """
-    return contextvars.copy_context()
+    return {
+        "_active_tracer_cv": _active_tracer_cv.get(None),
+        "_current": _current.get(None),
+    }
 
 
-def restore_context(ctx: contextvars.Context) -> None:
-    """恢复 ContextVar 上下文（在子线程中调用）。"""
-    pass  # copy_context 返回的 Context 对象可以直接在子线程中使用
+def restore_context(ctx: Dict[str, Any]) -> None:
+    """在当前线程中恢复所有 ContextVar（返回 token，便于 reset 可回滚）。"""
+    tokens: Dict[str, Any] = {}
+    if "_active_tracer_cv" in ctx:
+        tokens["_active_tracer_cv"] = _active_tracer_cv.set(ctx["_active_tracer_cv"])
+    if "_current" in ctx:
+        tokens["_current"] = _current.set(ctx["_current"])
+    return tokens
 
 
-def run_in_context(ctx: contextvars.Context, func: Callable, *args: Any, **kwargs: Any) -> Any:
-    """在指定上下文中执行函数（用于并发线程）。
-
-    用法：
-        ctx = trace.capture_context()
-        future = executor.submit(trace.run_in_context, ctx, do_work, arg1, arg2)
-    """
-    return ctx.run(func, *args, **kwargs)
+def run_in_context(ctx: Dict[str, Any], func: Callable, *args: Any, **kwargs: Any) -> Any:
+    """在指定上下文中执行函数（并发线程专用，不走 Context.run 避免重入报错）。"""
+    tokens = restore_context(ctx)
+    try:
+        return func(*args, **kwargs)
+    finally:
+        # 注意：reset 前判断 token 是否存在；此处不 reset 是为了兼容线程复用（线程池会复用线程，
+        # ContextVar 下次 restore 时会覆盖旧值即可，无需严格 reset）。
+        # 如果是一次性线程可打开下面的 reset：
+        # for k, t in tokens.items():
+        #     try:
+        #         if k == "_active_tracer_cv":
+        #             _active_tracer_cv.reset(t)
+        #         elif k == "_current":
+        #             _current.reset(t)
+        #     except (ValueError, LookupError):
+        #         pass
+        pass
 
 
 # ============================================================
@@ -261,12 +301,78 @@ def run_in_context(ctx: contextvars.Context, func: Callable, *args: Any, **kwarg
 # ============================================================
 
 def _append_jsonl(d: Dict[str, Any]) -> None:
+    """追加一行 trace 到今天的日志文件（追加模式，不覆盖历史）。"""
     try:
+        fpath = _current_traces_file()
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(TRACES_FILE, "a", encoding="utf-8") as f:
+        with open(fpath, "a", encoding="utf-8") as f:
             f.write(json.dumps(d, ensure_ascii=False, default=str) + "\n")
     except Exception:
         pass
+
+
+def _compute_token_usage(node: Dict[str, Any]) -> Dict[str, Any]:
+    """遍历 span 树，为每个节点计算 token_usage。
+
+    - model_call 节点：直接使用 data.usage 中的 token 数据
+    - 其他节点：累加所有子节点的 token 消耗
+    - 缓存命中字段也向父节点聚合
+    """
+    children = node.get("children", [])
+    direct_prompt = 0
+    direct_completion = 0
+    direct_total = 0
+    direct_cache_hit = 0
+    direct_cache_miss = 0
+
+    if node.get("type") == "model_call":
+        usage = node.get("data", {}).get("usage", {})
+        if usage:
+            direct_prompt = usage.get("prompt_tokens", 0) or 0
+            direct_completion = usage.get("completion_tokens", 0) or 0
+            direct_total = usage.get("total_tokens", 0) or 0
+            if not direct_total:
+                direct_total = direct_prompt + direct_completion
+            direct_cache_hit = usage.get("prompt_cache_hit_tokens", 0) or 0
+            direct_cache_miss = usage.get("prompt_cache_miss_tokens", 0) or 0
+
+    child_prompt = 0
+    child_completion = 0
+    child_total = 0
+    child_cache_hit = 0
+    child_cache_miss = 0
+    for child in children:
+        cu = _compute_token_usage(child)
+        child_prompt += cu["prompt_tokens"]
+        child_completion += cu["completion_tokens"]
+        child_total += cu["total_tokens"]
+        child_cache_hit += cu.get("cache_hit_tokens", 0)
+        child_cache_miss += cu.get("cache_miss_tokens", 0)
+
+    total_prompt = direct_prompt + child_prompt
+    total_completion = direct_completion + child_completion
+    total_all = direct_total + child_total
+    total_cache_hit = direct_cache_hit + child_cache_hit
+    total_cache_miss = direct_cache_miss + child_cache_miss
+
+    node["token_usage"] = {
+        "prompt_tokens": total_prompt,
+        "completion_tokens": total_completion,
+        "total_tokens": total_all,
+        "cache_hit_tokens": total_cache_hit,
+        "cache_miss_tokens": total_cache_miss,
+        "direct_prompt_tokens": direct_prompt,
+        "direct_completion_tokens": direct_completion,
+        "direct_total_tokens": direct_total,
+        "direct_cache_hit_tokens": direct_cache_hit,
+        "direct_cache_miss_tokens": direct_cache_miss,
+        "child_prompt_tokens": child_prompt,
+        "child_completion_tokens": child_completion,
+        "child_total_tokens": child_total,
+        "child_cache_hit_tokens": child_cache_hit,
+        "child_cache_miss_tokens": child_cache_miss,
+    }
+    return node["token_usage"]
 
 
 def _summarize(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -275,6 +381,15 @@ def _summarize(d: Dict[str, Any]) -> Dict[str, Any]:
     model_rounds = sum(1 for s in spans if s["type"] == "model_call")
     tool_calls = sum(1 for s in spans if s["type"] == "tool_call")
     skills = sum(1 for s in spans if s["type"] == "skill_call")
+
+    # 计算 token 聚合
+    token_usage = root.get("token_usage", {})
+    total_tokens = token_usage.get("total_tokens", 0)
+    prompt_tokens = token_usage.get("prompt_tokens", 0)
+    completion_tokens = token_usage.get("completion_tokens", 0)
+    cache_hit_tokens = token_usage.get("cache_hit_tokens", 0)
+    cache_miss_tokens = token_usage.get("cache_miss_tokens", 0)
+
     return {
         "id": root.get("id"),
         "ts": root.get("data", {}).get("ts"),
@@ -287,6 +402,11 @@ def _summarize(d: Dict[str, Any]) -> Dict[str, Any]:
         "skills": skills,
         "duration_ms": root.get("duration_ms"),
         "status": root.get("status"),
+        "total_tokens": total_tokens,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "cache_hit_tokens": cache_hit_tokens,
+        "cache_miss_tokens": cache_miss_tokens,
     }
 
 
@@ -297,49 +417,65 @@ def _flatten(node: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+def _iter_all_lines() -> List[str]:
+    """遍历所有日期的 trace 文件，返回所有行（老文件在前，新文件在后）。"""
+    out: List[str] = []
+    for fpath in _all_traces_files():
+        try:
+            with open(fpath, encoding="utf-8") as f:
+                out.extend(f.readlines())
+        except OSError:
+            continue
+    return out
+
+
 def list_traces(limit: int = 200) -> List[Dict[str, Any]]:
+    """列出最近的 trace 摘要（跨所有日期文件，最新在前）。"""
+    lines = _iter_all_lines()
     out: List[Dict[str, Any]] = []
-    if not TRACES_FILE.exists():
-        return out
-    try:
-        with open(TRACES_FILE, encoding="utf-8") as f:
-            lines = f.readlines()
-    except OSError:
-        return out
     for line in lines[-limit:]:
         try:
             d = json.loads(line)
         except (json.JSONDecodeError, ValueError):
             continue
+        # 确保 token_usage 已计算（兼容旧日志）
+        if "token_usage" not in d:
+            _compute_token_usage(d)
         out.append(_summarize(d))
     out.reverse()  # 最新在前
     return out
 
 
 def get_trace(tid: str) -> Optional[Dict[str, Any]]:
-    if not tid or not TRACES_FILE.exists():
+    """按 id 查找单条 trace（跨所有日期文件）。"""
+    if not tid:
         return None
-    try:
-        with open(TRACES_FILE, encoding="utf-8") as f:
-            for line in f:
-                try:
-                    d = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                if d.get("id") == tid:
-                    return d
-    except OSError:
-        return None
+    for fpath in _all_traces_files():
+        try:
+            with open(fpath, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        d = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    if d.get("id") == tid:
+                        # 确保 token_usage 已计算（兼容旧日志）
+                        if "token_usage" not in d:
+                            _compute_token_usage(d)
+                        return d
+        except OSError:
+            continue
     return None
 
 
 def clear_traces() -> int:
+    """清空所有日期的 trace 文件，返回被清空的总行数。"""
     n = 0
-    if TRACES_FILE.exists():
+    for fpath in _all_traces_files():
         try:
-            with open(TRACES_FILE, encoding="utf-8") as f:
-                n = sum(1 for _ in f)
-            TRACES_FILE.write_text("", encoding="utf-8")
+            with open(fpath, encoding="utf-8") as f:
+                n += sum(1 for _ in f)
+            fpath.write_text("", encoding="utf-8")
         except OSError:
-            n = 0
+            pass
     return n

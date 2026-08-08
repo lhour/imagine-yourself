@@ -4,7 +4,7 @@
 - 按跨度（秒数）选择不同的 skill / 管线编排剧情。
 
 跨度路由：
-- 短期（<= 1 天）：走 tick 管线（7 步），生成即时事件；若有玩家瞬间动作则注入。
+- 短期（<= 1 天）：走 tick 管线（v4 五节点），生成即时事件；若有玩家瞬间动作则注入。
 - 中期及以上（> 1 天）：走 time_jump 管线，time_skip_summarizer 生成中间时段多条事件 + 目标时刻事件。
 """
 
@@ -14,7 +14,7 @@ import json
 import re
 from typing import Any, Dict, Optional
 
-from src.backend.agent import pipeline as tick_pipeline
+from src.backend.agent import pipeline_v4 as tick_pipeline
 from src.backend.agent import time_jump_pipeline
 from src.backend.deepseek_client import chat_completion
 from src.backend.storage.connection import default_save_manager
@@ -80,7 +80,7 @@ def advance(
         result["advance_mode"] = "jump"
     else:
         # 短期：tick 管线即时推演
-        result = tick_pipeline.tick_once(seconds, 5, player_action)
+        result = tick_pipeline.tick_once_v4(seconds, 5, player_action)
         result["span_type"] = "tick"
         result.setdefault("advance_mode", "tick")
 

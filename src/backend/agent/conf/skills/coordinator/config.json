@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "统筹节点：合并所有角色决策，校验合法性，生成完整剧情 narrative",
+  "tools": ["world_create_event", "anchor_list_active", "anchor_advance"],
+  "params": {}
+}

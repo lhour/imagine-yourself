@@ -7,12 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.backend.http.deps import require_active_save
-from src.backend.agent import advance_pipeline, pipeline, time_jump_pipeline, trace
+from src.backend.agent import advance_pipeline, pipeline, pipeline_orchestrator, pipeline_v4, time_jump_pipeline, trace
 from src.backend.agent.skill.loader import (
     list_skills, get_skill, render_skill,
     list_skill_versions, get_skill_version_detail,
     create_skill_version, update_skill_version, set_skill_active_version,
     delete_skill_version,
+    create_skill, delete_skill, update_skill_config,
 )
 from src.backend.agent.prompt.loader import (
     list_prompts, get_prompt, render_prompt,
@@ -21,7 +22,8 @@ from src.backend.agent.prompt.loader import (
     delete_prompt_version,
 )
 from src.backend.agent.tool.base import ToolManager
-from src.backend.agent.tool import entity_tools
+from src.backend.agent.tool import entity_tools  # noqa: F401  触发 @tool 注册
+import src.backend.agent.tool  # noqa: F401  触发所有子模块（storage/map/world/anchor/graph/dynamic/knowledge/web_fetch）注册
 from src.backend.deepseek_client import chat_completion, is_mock_mode
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
@@ -137,10 +139,15 @@ class SetActiveReq(BaseModel):
 
 @router.post("/tick")
 def run_tick(req: TickReq, sm=Depends(require_active_save)):
-    """执行完整 tick 管线（7 步）。"""
+    """执行完整 tick 管线（C 阶段：纯 LLM 自主编排 + skill 硬约束）。
+
+    在 v4 五节点之上叠加：概率事件网关 / 编排规划 / 反思闭环 / 锚点校验。
+    """
     try:
         with trace.request("tick", action="tick", save=sm.active_save):
-            result = pipeline.tick_once(req.seconds, req.max_actors, req.player_action)
+            result = pipeline_orchestrator.tick_once_orchestrated(
+                req.seconds, req.max_actors, req.player_action
+            )
             result["trace_id"] = trace.current_trace_id()
             return result
     except RuntimeError as e:
@@ -194,10 +201,11 @@ def call_skill_endpoint(name: str, req: CallSkillReq, sm=Depends(require_active_
 
 # ============================================================
 # Skill / Prompt / Tool 配置查询（前端「模型管理」页用）
+# 这些端点仅读写磁盘配置文件，不依赖激活存档，故不加 require_active_save。
 # ============================================================
 
 @router.get("/skills")
-def list_skills_endpoint(sm=Depends(require_active_save)):
+def list_skills_endpoint():
     items = []
     for name in list_skills():
         fs = get_skill(name)
@@ -213,7 +221,7 @@ def list_skills_endpoint(sm=Depends(require_active_save)):
 
 
 @router.get("/skills/{name}")
-def get_skill_endpoint(name: str, sm=Depends(require_active_save)):
+def get_skill_endpoint(name: str):
     fs = get_skill(name)
     if not fs:
         raise HTTPException(404, f"skill {name} 不存在")
@@ -221,19 +229,23 @@ def get_skill_endpoint(name: str, sm=Depends(require_active_save)):
         "name": name,
         "description": fs.description,
         "default_version": fs.default_version,
+        "active_version": fs.default_version,
         "tools": fs.tools,
         "params": fs.params,
         "versions": list(fs.versions.keys()),
+        "config": fs.config,
     }
 
 
 @router.get("/skills/{name}/render")
 def render_skill_endpoint(
     name: str,
-    sm=Depends(require_active_save),
     version: Optional[str] = None,
 ):
-    """渲染 skill system_prompt（注入当前变量）。"""
+    """渲染 skill system_prompt（注入当前变量）。
+
+    无激活存档时 _build_variables() 返回空 dict，仍可正常渲染。
+    """
     try:
         from src.backend.agent.pipeline import _build_variables
         text = render_skill(name, _build_variables(), version)
@@ -243,12 +255,12 @@ def render_skill_endpoint(
 
 
 @router.get("/prompts")
-def list_prompts_endpoint(sm=Depends(require_active_save)):
+def list_prompts_endpoint():
     return {"items": list_prompts()}
 
 
 @router.get("/prompts/{name}")
-def get_prompt_endpoint(name: str, sm=Depends(require_active_save)):
+def get_prompt_endpoint(name: str):
     fp = get_prompt(name)
     if not fp:
         raise HTTPException(404, f"prompt {name} 不存在")
@@ -260,7 +272,7 @@ def get_prompt_endpoint(name: str, sm=Depends(require_active_save)):
 
 
 @router.get("/variables")
-def get_variables(sm=Depends(require_active_save)):
+def get_variables():
     """返回 variables.json 内容。"""
     import json
     from src.backend.env import BACKEND_DIR
@@ -271,14 +283,14 @@ def get_variables(sm=Depends(require_active_save)):
 
 
 @router.get("/tools")
-def list_tools(sm=Depends(require_active_save)):
-    """列出所有已注册的工具。"""
-    names = ToolManager.list_names()
-    return {"tools": names, "count": len(names)}
+def list_tools():
+    """列出所有已注册的工具及当前描述（含覆盖）。"""
+    items = ToolManager.list_with_descriptions()
+    return {"tools": items, "count": len(items)}
 
 
 @router.get("/tools/_slugs")
-def list_entity_tool_slugs(sm=Depends(require_active_save)):
+def list_entity_tool_slugs():
     """实体 CRUD 工具的 slug 清单（每实体 5 个工具）。
 
     注意：必须放在 /tools/{name} 之前，否则 _slugs 会被当作 name 捕获。
@@ -300,7 +312,7 @@ def list_entity_tool_slugs(sm=Depends(require_active_save)):
 
 
 @router.get("/tools/{name}")
-def get_tool(name: str, sm=Depends(require_active_save)):
+def get_tool(name: str):
     spec = ToolManager.get(name)
     if not spec:
         raise HTTPException(404, f"工具 {name} 不存在")
@@ -317,7 +329,7 @@ def get_tool(name: str, sm=Depends(require_active_save)):
 # ============================================================
 
 @router.get("/skills/{name}/versions")
-def list_skill_versions_endpoint(name: str, sm=Depends(require_active_save)):
+def list_skill_versions_endpoint(name: str):
     try:
         versions = list_skill_versions(name)
     except FileNotFoundError as e:
@@ -326,7 +338,7 @@ def list_skill_versions_endpoint(name: str, sm=Depends(require_active_save)):
 
 
 @router.get("/skills/{name}/versions/{version}")
-def get_skill_version_endpoint(name: str, version: str, sm=Depends(require_active_save)):
+def get_skill_version_endpoint(name: str, version: str):
     try:
         return get_skill_version_detail(name, version)
     except FileNotFoundError as e:
@@ -335,7 +347,7 @@ def get_skill_version_endpoint(name: str, version: str, sm=Depends(require_activ
 
 @router.post("/skills/{name}/versions")
 def create_skill_version_endpoint(
-    name: str, req: CreateVersionReq, sm=Depends(require_active_save)
+    name: str, req: CreateVersionReq
 ):
     try:
         return create_skill_version(
@@ -353,7 +365,6 @@ def create_skill_version_endpoint(
 @router.put("/skills/{name}/versions/{version}")
 def update_skill_version_endpoint(
     name: str, version: str, req: UpdateSkillVersionReq,
-    sm=Depends(require_active_save),
 ):
     try:
         return update_skill_version(name, version, req.skill_md)
@@ -363,7 +374,7 @@ def update_skill_version_endpoint(
 
 @router.put("/skills/{name}/active")
 def set_skill_active_endpoint(
-    name: str, req: SetActiveReq, sm=Depends(require_active_save)
+    name: str, req: SetActiveReq
 ):
     try:
         return set_skill_active_version(name, req.version)
@@ -376,7 +387,7 @@ def set_skill_active_endpoint(
 # ============================================================
 
 @router.get("/prompts/{name}/versions")
-def list_prompt_versions_endpoint(name: str, sm=Depends(require_active_save)):
+def list_prompt_versions_endpoint(name: str):
     try:
         versions = list_prompt_versions(name)
     except FileNotFoundError as e:
@@ -385,7 +396,7 @@ def list_prompt_versions_endpoint(name: str, sm=Depends(require_active_save)):
 
 
 @router.get("/prompts/{name}/versions/{version}")
-def get_prompt_version_endpoint(name: str, version: str, sm=Depends(require_active_save)):
+def get_prompt_version_endpoint(name: str, version: str):
     try:
         return get_prompt_version_detail(name, version)
     except FileNotFoundError as e:
@@ -394,7 +405,7 @@ def get_prompt_version_endpoint(name: str, version: str, sm=Depends(require_acti
 
 @router.post("/prompts/{name}/versions")
 def create_prompt_version_endpoint(
-    name: str, req: CreatePromptVersionReq, sm=Depends(require_active_save)
+    name: str, req: CreatePromptVersionReq
 ):
     try:
         return create_prompt_version(
@@ -413,7 +424,6 @@ def create_prompt_version_endpoint(
 @router.put("/prompts/{name}/versions/{version}")
 def update_prompt_version_endpoint(
     name: str, version: str, req: UpdatePromptVersionReq,
-    sm=Depends(require_active_save),
 ):
     try:
         return update_prompt_version(
@@ -425,7 +435,7 @@ def update_prompt_version_endpoint(
 
 @router.put("/prompts/{name}/active")
 def set_prompt_active_endpoint(
-    name: str, req: SetActiveReq, sm=Depends(require_active_save)
+    name: str, req: SetActiveReq
 ):
     try:
         return set_prompt_active_version(name, req.version)
@@ -437,7 +447,7 @@ def set_prompt_active_endpoint(
 
 @router.delete("/skills/{name}/versions/{version}")
 def delete_skill_version_endpoint(
-    name: str, version: str, sm=Depends(require_active_save)
+    name: str, version: str
 ):
     try:
         return delete_skill_version(name, version)
@@ -449,7 +459,7 @@ def delete_skill_version_endpoint(
 
 @router.delete("/prompts/{name}/versions/{version}")
 def delete_prompt_version_endpoint(
-    name: str, version: str, sm=Depends(require_active_save)
+    name: str, version: str
 ):
     try:
         return delete_prompt_version(name, version)
@@ -457,3 +467,80 @@ def delete_prompt_version_endpoint(
         raise HTTPException(404, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ============================================================
+# Skill 整体 CRUD（新增 / 删除 / 更新 config.json 元信息）
+# ============================================================
+
+class CreateSkillReq(BaseModel):
+    name: str
+    description: str = ""
+    tools: Optional[List[str]] = None
+    params: Optional[Dict[str, Any]] = None
+    skill_md: str = ""
+
+
+@router.post("/skills")
+def create_skill_endpoint(req: CreateSkillReq):
+    try:
+        return create_skill(
+            name=req.name,
+            description=req.description,
+            tools=req.tools,
+            params=req.params,
+            skill_md=req.skill_md,
+        )
+    except FileExistsError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/skills/{name}")
+def delete_skill_endpoint(name: str):
+    try:
+        return delete_skill(name)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+
+class UpdateSkillConfigReq(BaseModel):
+    description: Optional[str] = None
+    tools: Optional[List[str]] = None
+    params: Optional[Dict[str, Any]] = None
+    default_version: Optional[str] = None
+
+
+@router.patch("/skills/{name}/config")
+def update_skill_config_endpoint(
+    name: str, req: UpdateSkillConfigReq
+):
+    try:
+        return update_skill_config(
+            name=name,
+            description=req.description,
+            tools=req.tools,
+            params=req.params,
+            default_version=req.default_version,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+
+# ============================================================
+# Tool 描述更新（写入 tool_descriptions.json）
+# ============================================================
+
+class UpdateToolDescReq(BaseModel):
+    description: str
+
+
+@router.put("/tools/{name}/description")
+def update_tool_description_endpoint(
+    name: str, req: UpdateToolDescReq
+):
+    old = ToolManager.update_description(name, req.description)
+    if old is None:
+        raise HTTPException(404, f"工具 {name} 不存在")
+    return {"name": name, "description": req.description, "old_description": old}

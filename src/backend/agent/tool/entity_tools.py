@@ -145,13 +145,21 @@ def _make_bulk_delete_tool(model_cls: type) -> None:
 def register_all_entity_tools() -> List[str]:
     """注册所有实体的 CRUD 工具，返回工具名列表。"""
     names: List[str] = []
+    _TYPE_SUFFIX = {
+        "_make_filter_tool": "filter",
+        "_make_count_tool": "count",
+        "_make_bulk_create_tool": "bulk_create",
+        "_make_bulk_update_tool": "bulk_update",
+        "_make_bulk_delete_tool": "bulk_delete",
+    }
     for model_cls in models.ENTITIES:
         for maker in [
             _make_filter_tool, _make_count_tool, _make_bulk_create_tool,
             _make_bulk_update_tool, _make_bulk_delete_tool,
         ]:
             maker(model_cls)
-            names.append(f"{model_cls.SLUG}_{maker.__name__.split('_make_')[1]}")
+            suffix = _TYPE_SUFFIX.get(maker.__name__, maker.__name__)
+            names.append(f"{model_cls.SLUG}_{suffix}")
     return names
 
 

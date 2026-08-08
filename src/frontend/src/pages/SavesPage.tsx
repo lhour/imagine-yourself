@@ -11,7 +11,9 @@ interface SaveRow {
     game_time?: string;
     script_name?: string;
     protagonist_id?: number | null;
+    era_name?: string;
   };
+  protagonist_name?: string;
   mtime?: string;
   size?: number;
 }
@@ -27,6 +29,9 @@ export default function SavesPage() {
   const setNotification = useGameStore((s) => s.setNotification);
   const setError = useGameStore((s) => s.setError);
   const switchSave = useGameStore((s) => s.switchSave);
+  const refreshSaves = useGameStore((s) => s.refreshSaves);
+  const clearActiveSave = useGameStore((s) => s.clearActiveSave);
+  const activeSave = useGameStore((s) => s.activeSave);
 
   const [saves, setSaves] = useState<SaveRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -37,22 +42,54 @@ export default function SavesPage() {
   const refresh = async () => {
     setLoading(true);
     try {
-      const list = await savesApi.list();
-      const rows: SaveRow[] = [];
-      for (const name of list) {
-        try {
-          await savesApi.switch(name);
-          const meta = await savesApi.getMeta();
-          rows.push({ name, meta });
-        } catch {
-          rows.push({ name });
+      // 并行获取存档列表和所有存档的元信息
+      const [list, metas] = await Promise.all([
+        savesApi.list(),
+        savesApi.batchMeta(),
+      ]);
+
+      const metaMap = new Map<string, any>();
+      for (const m of metas) {
+        if (m.save) {
+          metaMap.set(m.save as string, m);
         }
       }
-      // 切回第一个存档（如果有）
-      if (rows.length > 0) {
-        await savesApi.switch(rows[0].name);
-      }
+
+      const rows: SaveRow[] = list.map((name) => {
+        const meta = metaMap.get(name);
+        if (!meta) return { name };
+
+        const row: SaveRow = {
+          name,
+          meta: {
+            tick_num: meta.tick_num,
+            game_time: meta.game_time,
+            script_name: meta.script_name,
+            protagonist_id: meta.protagonist_id,
+            era_name: meta.era_name,
+          },
+        };
+
+        // 使用批量接口返回的主角名
+        if (meta.protagonist_name) {
+          row.protagonist_name = meta.protagonist_name as string;
+        } else if (meta.protagonist_id) {
+          row.protagonist_name = `#${meta.protagonist_id}`;
+        }
+
+        return row;
+      });
+
       setSaves(rows);
+
+      // 切回第一个存档（如果有），用 try-catch 防止超时影响列表显示
+      if (rows.length > 0) {
+        try {
+          await savesApi.switch(rows[0].name);
+        } catch {
+          // 忽略超时错误，列表已经显示
+        }
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(`加载存档列表失败：${msg}`);
@@ -80,8 +117,8 @@ export default function SavesPage() {
     if (!newName) return;
     try {
       await savesApi.create(newName);
+      await refresh();
       setNotification(`已创建空存档 ${newName}（复制数据功能待 v3.1 接入）`);
-      refresh();
     } catch (e: unknown) {
       setError(`复制失败：${e instanceof Error ? e.message : e}`);
     }
@@ -91,10 +128,14 @@ export default function SavesPage() {
     if (!window.confirm(`确定删除存档 "${name}"？此操作不可恢复。`)) return;
     try {
       await savesApi.delete(name);
-      setNotification(`已删除存档 ${name}`);
-      refresh();
-    } catch (e: unknown) {
-      setError(`删除失败：${e instanceof Error ? e.message : e}`);
+      if (activeSave === name) {
+        clearActiveSave();
+        await refreshSaves();
+      }
+      await refresh();
+      setNotification(`存档「${name}」已删除`);
+    } catch (e) {
+      setError(`删除存档失败：${(e as Error).message}`);
     }
   };
 
@@ -113,9 +154,9 @@ export default function SavesPage() {
   const handleCreateSnapshot = async () => {
     try {
       await savesApi.createSnapshot();
-      setNotification('快照已创建');
       const r = await savesApi.listSnapshots();
       setSnapshots(r.snapshots || []);
+      setNotification('快照已创建');
     } catch (e: unknown) {
       setError(`创建快照失败：${e instanceof Error ? e.message : e}`);
     }
@@ -125,8 +166,8 @@ export default function SavesPage() {
     if (!window.confirm(`确定回滚到快照 "${snap}"？当前未保存的进度将丢失。`)) return;
     try {
       await savesApi.restoreSnapshot(snap);
-      setNotification(`已回滚到 ${snap}`);
       setShowSnapshots(false);
+      setNotification(`已回滚到 ${snap}`);
     } catch (e: unknown) {
       setError(`回滚失败：${e instanceof Error ? e.message : e}`);
     }
@@ -136,9 +177,9 @@ export default function SavesPage() {
     if (!window.confirm(`删除快照 "${snap}"？`)) return;
     try {
       await savesApi.deleteSnapshot(snap);
-      setNotification(`已删除快照 ${snap}`);
       const r = await savesApi.listSnapshots();
       setSnapshots(r.snapshots || []);
+      setNotification(`已删除快照 ${snap}`);
     } catch (e: unknown) {
       setError(`删除失败：${e instanceof Error ? e.message : e}`);
     }
@@ -149,7 +190,7 @@ export default function SavesPage() {
       <AdminNav />
       <div className="admin-content">
         <div className="admin-header">
-          <h1>📂 读取存档</h1>
+          <h1>📂 Recall 回忆</h1>
           <button onClick={refresh} disabled={loading} className="btn-secondary">
             {loading ? '加载中...' : '🔄 刷新'}
           </button>
@@ -163,35 +204,42 @@ export default function SavesPage() {
             </button>
           </div>
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>存档名</th>
-                <th>剧本</th>
-                <th>tick</th>
-                <th>游戏时间</th>
-                <th>主角 ID</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {saves.map((s) => (
-                <tr key={s.name}>
-                  <td><strong>{s.name}</strong></td>
-                  <td>{s.meta?.script_name || '—'}</td>
-                  <td>{s.meta?.tick_num ?? '—'}</td>
-                  <td>{s.meta?.game_time || '—'}</td>
-                  <td>{s.meta?.protagonist_id ?? '—'}</td>
-                  <td className="actions">
-                    <button onClick={() => handleEnter(s.name)} className="btn-icon" title="进入">▶</button>
-                    <button onClick={() => handleCopy(s.name)} className="btn-icon" title="复制">📋</button>
-                    <button onClick={() => handleShowSnapshots(s.name)} className="btn-icon" title="快照">🕒</button>
-                    <button onClick={() => handleDelete(s.name)} className="btn-icon btn-danger" title="删除">🗑</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="saves-grid">
+            {saves.map((s) => (
+              <div key={s.name} className="save-detail-card">
+                <div className="save-detail-header">
+                  <div className="save-detail-icon">🎮</div>
+                  <div className="save-detail-name">{s.name}</div>
+                </div>
+                <div className="save-detail-info">
+                  <div className="save-detail-row">
+                    <span className="label">剧本</span>
+                    <span className="value">{s.meta?.script_name || '—'}</span>
+                  </div>
+                  <div className="save-detail-row">
+                    <span className="label">Tick</span>
+                    <span className="value">{s.meta?.tick_num ?? '—'}</span>
+                  </div>
+                  <div className="save-detail-row">
+                    <span className="label">游戏时间</span>
+                    <span className="value">{s.meta?.game_time || '—'}</span>
+                  </div>
+                  <div className="save-detail-row">
+                    <span className="label">主角</span>
+                    <span className="value highlight">
+                      {s.protagonist_name || (s.meta?.protagonist_id ? `#${s.meta.protagonist_id}` : '—')}
+                    </span>
+                  </div>
+                </div>
+                <div className="save-detail-actions">
+                  <button onClick={() => handleEnter(s.name)} className="btn-primary small">▶ 进入</button>
+                  <button onClick={() => handleShowSnapshots(s.name)} className="btn-secondary small">🕒 快照</button>
+                  <button onClick={() => handleCopy(s.name)} className="btn-secondary small">📋 复制</button>
+                  <button onClick={() => handleDelete(s.name)} className="btn-icon btn-danger" title="删除">🗑</button>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
 
         {showSnapshots && (

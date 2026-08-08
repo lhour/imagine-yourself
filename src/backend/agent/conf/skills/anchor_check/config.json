@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "锚点满足校验器：校验narrative/事件是否满足锚点的trigger_condition_raw，满足则调用anchor_advance完成fulfill",
+  "tools": ["anchor_list_active", "anchor_advance", "anchor_get_by_plot_arc"],
+  "params": {}
+}

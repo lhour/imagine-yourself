@@ -94,6 +94,12 @@ def create_event(
     """写入一条世界事件（含参与人）。"""
     sm = default_save_manager()
     meta = sm.get_meta()
+    # 校验 location_map_id：LLM 可能凭空捏造不存在的 map_id，
+    # 而 events.location_map_id 有外键约束，会触发 IntegrityError 导致整条事件丢失。
+    # 校验失败时降级为「无地点」，保住事件本身。
+    if location_map_id is not None and not models.Map.get(location_map_id):
+        location_map_id = None
+        location_detail_raw = None
     e = models.Event.create(
         tick_num=meta["tick_num"],
         game_time=meta["game_time"],
@@ -106,13 +112,20 @@ def create_event(
         visibility=visibility,
         custom_attrs=custom_attrs or {},
     )
-    # 写参与人
+    # 写参与人（B1 修复：按 (type, id) 去重，防止同一角色被重复添加）
     if participants:
+        seen: set[tuple[str, int]] = set()
         for p in participants:
+            ptype = p.get("type", "character")
+            pid = p["id"]
+            key = (ptype, pid)
+            if key in seen:
+                continue
+            seen.add(key)
             models.EventParticipant.create(
                 event_id=e.id,
-                participant_type=p.get("type", "character"),
-                participant_id=p["id"],
+                participant_type=ptype,
+                participant_id=pid,
                 role_raw=p.get("role", "witness"),
                 perception_raw=p.get("perception"),
             )
@@ -215,9 +228,11 @@ def list_events(
     char_ids: Optional[List[int]] = None,
     map_ids: Optional[List[int]] = None,
     event_types: Optional[List[str]] = None,
+    before_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """列出世界事件（按 tick 倒序、id 倒序，最新在上）。
     额外支持按角色/地点多条件筛选，返回时注入参与人和记忆可见性。
+    before_id 游标：仅返回 id < before_id 的事件，供前端「向上加载更早历史」分页。
     """
     where_parts: List[str] = []
     params: List[Any] = []
@@ -237,6 +252,9 @@ def list_events(
     if tick_to is not None:
         where_parts.append("tick_num <= ?")
         params.append(tick_to)
+    if before_id is not None:
+        where_parts.append("id < ?")
+        params.append(before_id)
     if char_ids:
         where_parts.append(
             "id IN (SELECT event_id FROM event_participants "
@@ -252,7 +270,8 @@ def list_events(
     items = models.Event.list(
         where=where, params=params, order_by="tick_num DESC, id DESC", limit=limit
     )
-    total = models.Event.count(where=where, params=params)
+    # total 仅在非游标分页时计算（首页），游标分页时复用首页 total 即可
+    total = models.Event.count(where=where, params=params) if before_id is None else 0
     return {"items": _inject_event_meta(items), "count": len(items), "total": total}
 
 

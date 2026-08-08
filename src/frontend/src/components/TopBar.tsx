@@ -12,7 +12,7 @@ export default function TopBar() {
   return (
     <>
       <div className="topbar-section">
-        <span className="topbar-title">设身处地 v3</span>
+        <span className="topbar-title">Aether Story Engine</span>
         {activeSave && (
           <span className="meta-chip">
             存档 <strong>{activeSave}</strong>

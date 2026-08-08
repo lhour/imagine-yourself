@@ -229,6 +229,48 @@ export interface TickResponse {
   events_created: number[];
   decisions: Array<{ char_id: number; char_name: string; decision: unknown }>;
   mock_mode: boolean;
+  /** v4: coordinator 合成的连贯剧情文本（narrative 为主展示，events 可展开） */
+  narrative?: string;
+  /** 推进的实际秒数（advance 返回） */
+  seconds?: number;
+  /** advance 模式：tick / jump */
+  advance_mode?: 'tick' | 'jump';
+  /** C 阶段：是否走 orchestrator（v4 + 编排层） */
+  orchestrated?: boolean;
+  /** C 阶段：编排层摘要（概率事件 / 规划 / 反思 / 锚点校验 / 配额使用） */
+  orchestration?: OrchestrationSummary;
+  /** narrative 是否被反思重写 */
+  narrative_rewritten?: boolean;
+}
+
+/** C 阶段编排层摘要 */
+export interface OrchestrationSummary {
+  probability_events: {
+    hard_hint: string;
+    sampled: boolean;
+    triggers?: string[];
+    params?: { death_likelihood: number; luck_bias: number; challenge_bias: number };
+  };
+  plan: {
+    skip_nodes: string[];
+    skip_reasons: Record<string, string>;
+    mock?: boolean;
+  };
+  reflection: {
+    passed: boolean;
+    final_narrative: string;
+    conflicts: Array<{ type: string; severity: string; description: string }>;
+    retries: number;
+    anchors_fulfilled?: Array<{ anchor_id: number; evidence: string }>;
+  };
+  anchor_check: {
+    checked?: number;
+    fulfilled?: Array<{ anchor_id: number; title?: string; evidence?: string; fulfilled_event_id?: number }>;
+    expired?: Array<{ anchor_id: number; reason?: string }>;
+    unchanged?: Array<{ anchor_id: number; reason?: string }>;
+    skipped?: boolean;
+  };
+  quota_used: Record<string, number>;
 }
 
 export interface TimeJumpResponse {
@@ -260,6 +302,31 @@ export interface SkillVersionDetail {
   version: string;
   system_prompt: string;
   skill_md: string;
+}
+
+// ============================================================
+// 锚点剧情（v4）
+// ============================================================
+
+export type AnchorStatus = 'pending' | 'active' | 'fulfilled' | 'expired' | 'abandoned';
+
+export interface AnchorPlot {
+  id: number;
+  title: string;
+  desc_raw: string;
+  desc_polished: string | null;
+  inevitability: number;          // 0-5：0=灵感，1-2=软引导，3-4=强引导，5=硬约束
+  status: AnchorStatus;
+  trigger_condition_raw: string;
+  target_tick: number | null;
+  created_tick: number;
+  fulfilled_tick: number | null;
+  fulfilled_event_id: number | null;
+  created_by: string;             // human | model | system
+  priority: number;               // 1-5
+  plot_arc: string;
+  tags: string[];
+  custom_attrs: Record<string, unknown>;
 }
 
 export interface ToolSlug {

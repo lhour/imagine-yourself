@@ -1,0 +1,20 @@
+{
+  "default_version": "v0",
+  "description": "v5 世界反应 v2：动态实体创建 + 设定追加 + 配额检查",
+  "tools": [
+    "entity_quota_check",
+    "character_create_dynamic",
+    "group_create_dynamic",
+    "map_create_dynamic",
+    "map_feature_create_dynamic",
+    "item_create_dynamic",
+    "setting_append_dynamic",
+    "world_meta_append_note",
+    "character_filter",
+    "group_filter",
+    "map_filter",
+    "setting_filter",
+    "world_create_event"
+  ],
+  "params": {}
+}

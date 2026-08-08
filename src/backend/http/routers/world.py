@@ -77,8 +77,11 @@ def list_events(
     char_ids: Optional[str] = None,
     map_ids: Optional[str] = None,
     event_types: Optional[str] = None,
+    before_id: Optional[int] = None,
 ):
-    """列出世界事件（按 tick 倒序）。char_ids/map_ids/event_types 用逗号分隔 ID。"""
+    """列出世界事件（按 tick 倒序）。char_ids/map_ids/event_types 用逗号分隔 ID。
+    before_id 游标：仅返回 id < before_id 的事件，用于向上加载更早历史。
+    """
     def split_ints(s: Optional[str]) -> Optional[List[int]]:
         if not s:
             return None
@@ -101,6 +104,7 @@ def list_events(
         char_ids=split_ints(char_ids),
         map_ids=split_ints(map_ids),
         event_types=split_strs(event_types),
+        before_id=before_id,
     )
 
 

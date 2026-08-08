@@ -4,6 +4,29 @@ import AdminNav from '../components/AdminNav';
 import { dramasApi } from '../api/client';
 import { useGameStore } from '../store/gameStore';
 
+interface QuotaEntity {
+  per_tick: number;
+  per_100tick: number;
+  max_total: number;
+  allowed: boolean;
+}
+
+interface DramaGameplayOptions {
+  player_sexuality: string;
+  death_likelihood: number;
+  favorability_bias: number;
+  luck_bias: number;
+  challenge_bias: number;
+  writing_style: string;
+  dynamic_entity: Record<string, QuotaEntity>;
+  context_budget: {
+    max_dynamic_entities_per_prompt: number;
+    max_static_bytes: number;
+    over_budget_policy: string;
+  };
+  world_modify_allowed: boolean;
+}
+
 interface DramaItem {
   name: string;
   title: string;
@@ -114,6 +137,62 @@ export default function DramasPage() {
     ok: boolean; errors: string[]; warnings: string[]; info: Record<string, unknown>;
   } | null>(null);
 
+  // 玩法配置弹窗
+  const [gameplayDrama, setGameplayDrama] = useState<string | null>(null);
+  const [gameplayOptions, setGameplayOptions] = useState<DramaGameplayOptions | null>(null);
+  const [gameplayLoading, setGameplayLoading] = useState(false);
+  const [gameplaySaving, setGameplaySaving] = useState(false);
+
+  const handleOpenGameplay = async (name: string) => {
+    setGameplayDrama(name);
+    setGameplayLoading(true);
+    try {
+      const opts = await dramasApi.getGameplayOptions(name);
+      setGameplayOptions(opts as DramaGameplayOptions);
+    } catch (e: unknown) {
+      setError(`加载玩法配置失败：${e instanceof Error ? e.message : e}`);
+      setGameplayDrama(null);
+    } finally {
+      setGameplayLoading(false);
+    }
+  };
+
+  const handleSaveGameplay = async () => {
+    if (!gameplayDrama || !gameplayOptions) return;
+    setGameplaySaving(true);
+    try {
+      await dramasApi.saveGameplayOptions(gameplayDrama, gameplayOptions);
+      setNotification(`剧本 "${gameplayDrama}" 玩法配置已保存`);
+      setGameplayDrama(null);
+      setGameplayOptions(null);
+    } catch (e: unknown) {
+      setError(`保存失败：${e instanceof Error ? e.message : e}`);
+    } finally {
+      setGameplaySaving(false);
+    }
+  };
+
+  const updateGPOption = <K extends keyof DramaGameplayOptions>(key: K, value: DramaGameplayOptions[K]) => {
+    setGameplayOptions((prev) => prev ? ({ ...prev, [key]: value }) : prev);
+  };
+
+  const updateGPDynamicEntity = (
+    et: string,
+    field: 'per_tick' | 'per_100tick' | 'max_total' | 'allowed',
+    value: number | boolean,
+  ) => {
+    setGameplayOptions((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        dynamic_entity: {
+          ...prev.dynamic_entity,
+          [et]: { ...prev.dynamic_entity[et], [field]: value },
+        },
+      };
+    });
+  };
+
   const refresh = async () => {
     setLoading(true);
     try {
@@ -141,10 +220,10 @@ export default function DramasPage() {
       const fullPrompt = `[风格:${genStyle}] [规模:${genScale}] ${genPrompt}`;
       const r = await dramasApi.generate(fullPrompt, genName || undefined);
       if (r.ok && !r.stub) {
-        setNotification(`剧本 "${r.name || genName}" 生成成功`);
         setShowGenerate(false);
         setGenPrompt('');
-        refresh();
+        await refresh();
+        setNotification(`剧本 "${r.name || genName}" 生成成功`);
       } else {
         setError(r.message || '一键生成功能尚未接入 LLM 管线（待阶段五）');
       }
@@ -170,8 +249,8 @@ export default function DramasPage() {
     if (!window.confirm(`确定删除剧本 "${name}"？此操作不可恢复。`)) return;
     try {
       await dramasApi.delete(name);
+      await refresh();
       setNotification(`已删除剧本 ${name}`);
-      refresh();
     } catch (e: unknown) {
       setError(`删除失败：${e instanceof Error ? e.message : e}`);
     }
@@ -331,6 +410,7 @@ export default function DramasPage() {
                     <button onClick={() => handlePreview(d.name)} className="btn-secondary">👁 预览</button>
                     <button onClick={() => handleValidate(d.name)} className="btn-secondary">✅ 校验</button>
                     <button onClick={() => handleExport(d.name)} className="btn-secondary">📦 导出zip</button>
+                    <button onClick={() => handleOpenGameplay(d.name)} className="btn-secondary">🎮 玩法配置</button>
                     <button
                       onClick={() => { setInitDrama(d.name); setInitSaveName(`${d.name}_run`); }}
                       className="btn-primary"
@@ -356,10 +436,12 @@ export default function DramasPage() {
               <div className="form-group">
                 <label>提示词</label>
                 <textarea
+                  id="generate-prompt-textarea"
                   value={genPrompt}
                   onChange={(e) => setGenPrompt(e.target.value)}
                   placeholder="都市异能，主角沈默，上海市，白银时代..."
-                  rows={4}
+                  rows={14}
+                  style={{ minHeight: 280, fontSize: 14, lineHeight: 1.6 }}
                 />
               </div>
               <div className="form-row">
@@ -514,6 +596,120 @@ export default function DramasPage() {
               <div className="modal-actions">
                 <button onClick={() => { setValidateDrama(null); setValidateResult(null); }} className="btn-primary">
                   关闭
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 玩法配置 Modal */}
+        {gameplayDrama && (
+          <div className="modal-overlay large" onClick={() => { setGameplayDrama(null); setGameplayOptions(null); }}>
+            <div className="modal large" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <h2>🎮 剧本玩法配置：{gameplayDrama}</h2>
+                <button onClick={() => { setGameplayDrama(null); setGameplayOptions(null); }} className="btn-icon">✕</button>
+              </div>
+              <div style={{ marginBottom: 16, padding: '8px 12px', background: 'var(--info-soft)', border: '1px solid var(--info)', borderRadius: 6, fontSize: 13 }}>
+                💡 剧本级玩法配置：由此剧本导入的新存档将继承以下配置。存档进行中修改不影响剧本。
+              </div>
+              {gameplayLoading ? (
+                <div className="loading">加载配置中...</div>
+              ) : gameplayOptions ? (
+                <div style={{ maxHeight: 'calc(85vh - 180px)', overflowY: 'auto', paddingRight: 8 }}>
+                  <div className="form-row" style={{ marginBottom: 16 }}>
+                    <div className="form-group">
+                      <label>主角性取向</label>
+                      <select value={gameplayOptions.player_sexuality} onChange={(e) => updateGPOption('player_sexuality', e.target.value)}>
+                        {['男', '女', '同主角', '异主角'].map((v) => <option key={v} value={v}>{v}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>叙事笔法</label>
+                      <select value={gameplayOptions.writing_style} onChange={(e) => updateGPOption('writing_style', e.target.value)}>
+                        {['直白', '隐晦', '写意', '克制'].map((v) => <option key={v} value={v}>{v}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>死亡概率</label>
+                      <select value={gameplayOptions.death_likelihood} onChange={(e) => updateGPOption('death_likelihood', Number(e.target.value))}>
+                        {[{v:0,l:'几乎不会死'},{v:1,l:'很少死亡'},{v:2,l:'偶发死亡'},{v:3,l:'正常概率'},{v:4,l:'较频繁'},{v:5,l:'频繁且残酷'}].map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="form-row" style={{ marginBottom: 16 }}>
+                    <div className="form-group">
+                      <label>好感度倾向</label>
+                      <select value={gameplayOptions.favorability_bias} onChange={(e) => updateGPOption('favorability_bias', Number(e.target.value))}>
+                        {[-5,-3,-1,0,1,3,5].map((v) => <option key={v} value={v}>{v > 0 ? `+${v}` : v}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>运气倾向</label>
+                      <select value={gameplayOptions.luck_bias} onChange={(e) => updateGPOption('luck_bias', Number(e.target.value))}>
+                        {[-5,-3,-1,0,1,3,5].map((v) => <option key={v} value={v}>{v > 0 ? `+${v}` : v}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>挑战倾向</label>
+                      <select value={gameplayOptions.challenge_bias} onChange={(e) => updateGPOption('challenge_bias', Number(e.target.value))}>
+                        {[-5,-3,-1,0,1,3,5].map((v) => <option key={v} value={v}>{v > 0 ? `+${v}` : v}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ marginBottom: 12, fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)' }}>📊 动态实体配额</div>
+                  <div style={{ overflowX: 'auto', marginBottom: 16 }}>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>实体</th><th>允许</th><th>每tick</th><th>100tick累计</th><th>全局累计</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(gameplayOptions.dynamic_entity).map(([et, q]) => {
+                          const names: Record<string, string> = { character: '角色', group: '群体', setting: '设定', map: '地图', map_feature: '地图要素', item: '物品' };
+                          return (
+                            <tr key={et}>
+                              <td className="entity-name">{names[et] || et}</td>
+                              <td>
+                                <input type="checkbox" checked={q.allowed} onChange={(e) => updateGPDynamicEntity(et, 'allowed', e.target.checked)} />
+                              </td>
+                              <td><input type="number" min={0} max={20} value={q.per_tick} onChange={(e) => updateGPDynamicEntity(et, 'per_tick', Number(e.target.value))} style={{ width: 80 }} /></td>
+                              <td><input type="number" min={0} max={500} value={q.per_100tick} onChange={(e) => updateGPDynamicEntity(et, 'per_100tick', Number(e.target.value))} style={{ width: 90 }} /></td>
+                              <td><input type="number" min={0} max={10000} value={q.max_total} onChange={(e) => updateGPDynamicEntity(et, 'max_total', Number(e.target.value))} style={{ width: 100 }} /></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="form-row" style={{ marginBottom: 12 }}>
+                    <div className="form-group">
+                      <label>单次动态实体上限</label>
+                      <input type="number" min={1} max={200} value={gameplayOptions.context_budget.max_dynamic_entities_per_prompt} onChange={(e) => updateGPOption('context_budget', { ...gameplayOptions.context_budget, max_dynamic_entities_per_prompt: Number(e.target.value) })} />
+                    </div>
+                    <div className="form-group">
+                      <label>超预算策略</label>
+                      <select value={gameplayOptions.context_budget.over_budget_policy} onChange={(e) => updateGPOption('context_budget', { ...gameplayOptions.context_budget, over_budget_policy: e.target.value })}>
+                        <option value="recency+importance">最近+重要度</option>
+                        <option value="recency">仅最近</option>
+                        <option value="importance">仅重要度</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>世界修改权限</label>
+                      <select value={gameplayOptions.world_modify_allowed ? 'true' : 'false'} onChange={(e) => updateGPOption('world_modify_allowed', e.target.value === 'true')}>
+                        <option value="false">禁止（只读）</option>
+                        <option value="true">允许追加</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              <div className="modal-actions">
+                <button onClick={() => { setGameplayDrama(null); setGameplayOptions(null); }} className="btn-secondary">取消</button>
+                <button onClick={handleSaveGameplay} disabled={gameplaySaving} className="btn-primary">
+                  {gameplaySaving ? '⏳ 保存中...' : '💾 保存配置'}
                 </button>
               </div>
             </div>

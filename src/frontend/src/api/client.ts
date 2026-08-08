@@ -1,11 +1,25 @@
 // v3 API 客户端 — 与 src.backend.http 路由对应
 import axios from 'axios';
+import type { AnchorPlot } from './types';
 
 export const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 });
+
+// 响应拦截器：提取后端返回的详细错误消息
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.data?.detail) {
+      error.message = error.response.data.detail;
+    } else if (error.response?.data?.message) {
+      error.message = error.response.data.message;
+    }
+    return Promise.reject(error);
+  }
+);
 
 // 重型 LLM 管线（tick / 时间跨越）耗时远超普通请求，
 // 单独放宽超时，避免 30s 默认超时导致 net::ERR_ABORTED。
@@ -17,6 +31,8 @@ const LLM_TIMEOUT = 600000; // 10 分钟
 
 export const savesApi = {
   list: () => api.get<{ saves: string[] }>('/saves').then((r) => r.data.saves),
+  batchMeta: () => api.get<{ metas: Array<Record<string, unknown>> }>('/saves/batch-meta').then((r) => r.data.metas),
+  getActive: () => api.get<{ active_save: string | null }>('/saves/active').then((r) => r.data.active_save),
   create: (name: string) => api.post('/saves', { name }).then((r) => r.data),
   switch: (name: string) => api.post(`/saves/${name}/switch`).then((r) => r.data),
   delete: (name: string) => api.delete(`/saves/${name}`).then((r) => r.data),
@@ -73,6 +89,7 @@ export const worldApi = {
     tick_to?: number;
     char_ids?: string;
     map_ids?: string;
+    before_id?: number;
   }) => api.get('/world/events', { params }).then((r) => r.data),
   getEvent: (eventId: number) => api.get(`/world/events/${eventId}`).then((r) => r.data),
   createEvent: (body: Record<string, unknown>) =>
@@ -127,6 +144,30 @@ export const groupsApi = {
 };
 
 // ============================================================
+// 锚点剧情
+// ============================================================
+
+export const anchorsApi = {
+  list: (params?: {
+    status?: string;
+    min_inevitability?: number;
+    plot_arc?: string;
+    limit?: number;
+  }) => api.get<{ items: AnchorPlot[]; count: number }>('/anchors', { params }).then((r) => r.data),
+  get: (id: number) => api.get<AnchorPlot>(`/anchors/${id}`).then((r) => r.data),
+  create: (body: Partial<AnchorPlot> & { title: string; desc_raw?: string }) =>
+    api.post<AnchorPlot>('/anchors', body).then((r) => r.data),
+  update: (id: number, body: Partial<AnchorPlot>) =>
+    api.put<AnchorPlot>(`/anchors/${id}`, body).then((r) => r.data),
+  delete: (id: number) => api.delete(`/anchors/${id}`).then((r) => r.data),
+  activate: (id: number) => api.post<AnchorPlot>(`/anchors/${id}/activate`).then((r) => r.data),
+  fulfill: (id: number, body?: { event_id?: number; reason?: string }) =>
+    api.post<AnchorPlot>(`/anchors/${id}/fulfill`, body ?? {}).then((r) => r.data),
+  abandon: (id: number, body?: { reason?: string }) =>
+    api.post<AnchorPlot>(`/anchors/${id}/abandon`, body ?? {}).then((r) => r.data),
+};
+
+// ============================================================
 // LLM 管线（agent）
 // ============================================================
 
@@ -153,6 +194,23 @@ export const agentApi = {
     api.get('/agent/skills').then((r) => r.data),
   getSkill: (name: string) =>
     api.get(`/agent/skills/${name}`).then((r) => r.data),
+  createSkill: (body: {
+    name: string;
+    description?: string;
+    tools?: string[];
+    params?: Record<string, unknown>;
+    skill_md?: string;
+  }) =>
+    api.post('/agent/skills', body).then((r) => r.data),
+  deleteSkill: (name: string) =>
+    api.delete(`/agent/skills/${name}`).then((r) => r.data),
+  updateSkillConfig: (name: string, body: {
+    description?: string;
+    tools?: string[];
+    params?: Record<string, unknown>;
+    default_version?: string;
+  }) =>
+    api.patch(`/agent/skills/${name}/config`, body).then((r) => r.data),
   listSkillVersions: (name: string) =>
     api.get(`/agent/skills/${name}/versions`).then((r) => r.data),
   getSkillVersion: (name: string, version: string) =>
@@ -187,6 +245,8 @@ export const agentApi = {
     api.get('/agent/tools/_slugs').then((r) => r.data),
   getTool: (name: string) =>
     api.get(`/agent/tools/${name}`).then((r) => r.data),
+  updateToolDescription: (name: string, description: string) =>
+    api.put(`/agent/tools/${name}/description`, { description }).then((r) => r.data),
 
   // Variables
   variables: () =>
@@ -245,6 +305,10 @@ export const dramasApi = {
     api.get(`/dramas/${name}/_generate_status`).then((r) => r.data),
   exportZip: (name: string) =>
     api.get(`/dramas/${name}/export`, { responseType: 'blob' }).then((r) => r.data),
+  getGameplayOptions: (name: string) =>
+    api.get(`/dramas/${name}/gameplay_options`).then((r) => r.data.options),
+  saveGameplayOptions: (name: string, options: object) =>
+    api.put(`/dramas/${name}/gameplay_options`, options).then((r) => r.data.options),
 };
 
 // ============================================================
@@ -274,6 +338,11 @@ export interface TraceSummary {
   skills: number;
   duration_ms?: number;
   status?: string;
+  total_tokens?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  cache_hit_tokens?: number;
+  cache_miss_tokens?: number;
 }
 
 export const tracesApi = {
@@ -284,4 +353,213 @@ export const tracesApi = {
     api.get<T>(`/traces/${tid}`).then((r) => r.data),
   clear: () =>
     api.delete<{ cleared: number }>('/traces').then((r) => r.data),
+};
+
+// ============================================================
+// v5 新功能：玩法选项 / 实体配额 / 操作日志 / 世界背景
+// ============================================================
+
+export interface QuotaUsage {
+  entity_type: string;
+  name: string;
+  allowed: boolean;
+  per_tick: { current: number; limit: number };
+  per_100tick: { current: number; limit: number };
+  max_total: { current: number; limit: number };
+}
+
+export const v5Api = {
+  // 玩法选项
+  getGameplayOptions: () =>
+    api.get<{ gameplay_options: Record<string, unknown>; quota_usage: QuotaUsage[] }>('/v5/gameplay_options')
+      .then((r) => r.data),
+  setGameplayOptions: (options: object) =>
+    api.put('/v5/gameplay_options', { options }).then((r) => r.data),
+  patchGameplayOptions: (patch: Record<string, unknown>) =>
+    api.patch('/v5/gameplay_options', { patch }).then((r) => r.data),
+
+  // 实体配额
+  getEntityQuota: () =>
+    api.get<{ quota_usage: QuotaUsage[] }>('/v5/entity_quota').then((r) => r.data),
+  checkEntityQuota: (entityType: string) =>
+    api.get<{ entity_type: string; passed: boolean; message?: string }>(`/v5/entity_quota/${entityType}`)
+      .then((r) => r.data),
+
+  // 操作日志
+  queryOperationLog: (params?: { op_type?: string; actor?: string; op_entity_type?: string; limit?: number }) =>
+    api.get<{ logs: Record<string, unknown>[]; count: number }>('/v5/operation_log', { params })
+      .then((r) => r.data),
+  getOperationLogSummary: () =>
+    api.get('/v5/operation_log/summary').then((r) => r.data),
+
+  // 世界背景
+  getWorldBackground: () =>
+    api.get('/v5/world_background').then((r) => r.data),
+  setWorldBackground: (body: {
+    world_background_raw?: string;
+    world_background_polished?: string;
+    civilization_summary?: string;
+  }) =>
+    api.put('/v5/world_background', body).then((r) => r.data),
+
+  // 上下文打包（调试）
+  getPackedContext: () =>
+    api.get('/v5/packed_context').then((r) => r.data),
+};
+
+// ============================================================
+// 知识库
+// ============================================================
+
+export interface KnowledgeCategory {
+  id: number;
+  name: string;
+  description: string;
+  item_count: number;
+}
+
+export interface KnowledgeItem {
+  id: number;
+  category_id: number;
+  title: string;
+  content: string;
+  keywords: string[];
+  tags: string[];
+  source: string;
+  importance: number;
+  created_at: string;
+  updated_at: string;
+  score?: number;
+}
+
+export const knowledgeApi = {
+  // 分类
+  listCategories: () =>
+    api.get<{ categories: KnowledgeCategory[] }>('/knowledge/categories')
+      .then((r) => r.data.categories),
+  createCategory: (name: string, description = '') =>
+    api.post('/knowledge/categories', { name, description }).then((r) => r.data),
+  updateCategory: (id: number, name: string, description = '') =>
+    api.put(`/knowledge/categories/${id}`, { name, description }).then((r) => r.data),
+  deleteCategory: (id: number) =>
+    api.delete(`/knowledge/categories/${id}`).then((r) => r.data),
+
+  // 条目
+  listItems: (categoryId = 0, page = 1, pageSize = 20) =>
+    api.get<{ items: KnowledgeItem[]; total: number; page: number; page_size: number; total_pages: number }>('/knowledge/items', {
+      params: { category_id: categoryId, page, page_size: pageSize },
+    }).then((r) => r.data),
+  getItem: (id: number) =>
+    api.get<KnowledgeItem>(`/knowledge/items/${id}`).then((r) => r.data),
+  createItem: (item: { title: string; content: string; category_id?: number; keywords?: string[]; tags?: string[]; importance?: number }) =>
+    api.post('/knowledge/items', item).then((r) => r.data),
+  updateItem: (id: number, item: { title?: string; content?: string; category_id?: number; keywords?: string[]; tags?: string[]; importance?: number }) =>
+    api.put(`/knowledge/items/${id}`, item).then((r) => r.data),
+  deleteItem: (id: number) =>
+    api.delete(`/knowledge/items/${id}`).then((r) => r.data),
+
+  // 检索
+  search: (query: string, categoryId = 0, topK = 10) =>
+    api.post<{ results: KnowledgeItem[]; total: number }>('/knowledge/search', {
+      query, category_id: categoryId, top_k: topK, mode: 'keyword',
+    }).then((r) => r.data),
+  getRandom: (categoryId = 0, count = 5) =>
+    api.get<{ items: KnowledgeItem[] }>('/knowledge/items/random', {
+      params: { category_id: categoryId, count },
+    }).then((r) => r.data),
+
+  // 统计
+  getStats: () =>
+    api.get<{ total_items: number; total_categories: number; total_searches: number; db_size_bytes: number }>('/knowledge/stats')
+      .then((r) => r.data),
+
+  // 批量导入
+  batchImport: (items: Array<{ title: string; content: string; category_id?: number; keywords?: string[]; tags?: string[]; importance?: number }>) =>
+    api.post('/knowledge/items/batch', items).then((r) => r.data),
+};
+
+// ============================================================
+// 周期事件调度（10.3）
+// ============================================================
+
+export interface ScheduledEvent {
+  id: number;
+  title: string;
+  desc_raw?: string;
+  importance: number;
+  schedule_type: 'recurring' | 'one_shot';
+  recurrence_pattern: string;
+  recurrence_detail_raw?: string;
+  next_trigger_game_time?: string;
+  scope: 'character' | 'group' | 'global';
+  scope_target_json?: number[];
+  event_template_json?: Record<string, unknown>;
+  trigger_condition_raw?: string;
+  expire_condition_raw?: string;
+  active: number;
+  created_by?: string;
+  created_tick?: number;
+  deactivated_tick?: number | null;
+  custom_attrs?: Record<string, unknown>;
+}
+
+export const scheduledEventsApi = {
+  list: (params?: { active_only?: number; scope?: string; limit?: number }) =>
+    api.get<{ items: ScheduledEvent[]; count: number }>('/scheduled-events', { params }).then((r) => r.data),
+  get: (id: number) => api.get<ScheduledEvent>(`/scheduled-events/${id}`).then((r) => r.data),
+  create: (body: Partial<ScheduledEvent> & { title: string }) =>
+    api.post<ScheduledEvent>('/scheduled-events', body).then((r) => r.data),
+  update: (id: number, body: Partial<ScheduledEvent>) =>
+    api.put<ScheduledEvent>(`/scheduled-events/${id}`, body).then((r) => r.data),
+  delete: (id: number) => api.delete(`/scheduled-events/${id}`).then((r) => r.data),
+  activate: (id: number) => api.post<ScheduledEvent>(`/scheduled-events/${id}/activate`).then((r) => r.data),
+  deactivate: (id: number) => api.post<ScheduledEvent>(`/scheduled-events/${id}/deactivate`).then((r) => r.data),
+};
+
+// ============================================================
+// 信息传播追踪（10.1）
+// ============================================================
+
+export interface EventDissemination {
+  id: number;
+  event_id: number;
+  target_char_id: number;
+  status: 'pending' | 'arrived' | 'distorted' | 'lost';
+  expected_arrival_game_time?: string;
+  arrived_game_time?: string;
+  distortion_level?: number;
+  received_version_raw?: string;
+  source_path_json?: number[];
+  hops?: number;
+  created_tick?: number;
+  updated_tick?: number;
+}
+
+export interface PublicKnowledgeRecord {
+  id: number;
+  event_id: number;
+  published_game_time?: string;
+  medium?: string;
+  coverage_scope?: string;
+  version_raw?: string;
+  reach_tags_json?: string[];
+}
+
+export interface DisseminationStats {
+  pending: number;
+  arrived: number;
+  distorted: number;
+  lost: number;
+  total: number;
+  [key: string]: number;
+}
+
+export const propagationApi = {
+  listDisseminations: (params?: { status?: string; event_id?: number; target_char_id?: number; limit?: number }) =>
+    api.get<{ items: EventDissemination[]; count: number }>('/propagation/disseminations', { params }).then((r) => r.data),
+  disseminationStats: () => api.get<DisseminationStats>('/propagation/disseminations/stats').then((r) => r.data),
+  listPublicKnowledge: (params?: { medium?: string; limit?: number }) =>
+    api.get<{ items: PublicKnowledgeRecord[]; count: number }>('/propagation/public-knowledge', { params }).then((r) => r.data),
+  markArrived: (id: number) => api.post<EventDissemination>(`/propagation/disseminations/${id}/mark-arrived`).then((r) => r.data),
+  markLost: (id: number) => api.post<EventDissemination>(`/propagation/disseminations/${id}/mark-lost`).then((r) => r.data),
 };

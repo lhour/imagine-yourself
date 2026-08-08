@@ -1,6 +1,0 @@
-{
-  "default_version": "v0",
-  "description": "事件润色器（风格：恐怖惊悚）：把 content_raw 改写为优美的 content_polished",
-  "tools": ["world_polish_event"],
-  "params": {}
-}

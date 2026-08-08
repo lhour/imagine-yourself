@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "消息传播推进器：扫描到期传播记录，生成失真记忆，推进信息触达",
+  "tools": ["memory_retrieve", "graph_upsert_views"],
+  "params": {}
+}

@@ -1,4 +1,4 @@
-# imagine yourself v3
+# Aether Story Engine
 
 > 基于 DeepSeek + 多存档 SQLite + FastAPI + React 的叙事游戏引擎
 
@@ -53,7 +53,7 @@ uvicorn src.backend.http.app:app --host 0.0.0.0 --port 8000 --reload
 ## 目录概览
 
 ```
-imagine-yourself/
+aether-story-engine/
 ├── src/
 │   ├── backend/          # v3 后端（agent/storage/service/http/drama/saves/tests）
 │   │   ├── agent/        # LLM 管线（prompts/skills/tools 配置 + pipeline）

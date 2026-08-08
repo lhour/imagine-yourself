@@ -1,1 +1,0 @@
-{"child_group_name": "银城学派·保守派", "parent_group_name": "银城学派", "relation_raw": "内部派系（未在角色表中显式列出，纯层级标注）", "weight": 0.6}

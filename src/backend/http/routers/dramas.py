@@ -15,6 +15,16 @@ from src.backend.service.drama_generator import (
     generate_step,
     get_generate_status,
     DRAMA_GENERATE_STEPS,
+    expand_outline,
+    generate_script,
+    evaluate_script,
+    regenerate_script,
+    run_pipeline,
+    run_pipeline_async,
+    get_pipeline_task,
+    list_pipeline_tasks,
+    delete_pipeline_task,
+    save_script_to_drama_dir,
 )
 
 router = APIRouter(prefix="/api/dramas", tags=["dramas"])
@@ -140,6 +150,30 @@ def delete_drama(name: str, sm=Depends(get_save_manager)):
 
 
 # ============================================================
+# 剧本级玩法配置（gameplay_options.json）
+# ============================================================
+
+@router.get("/{name}/gameplay_options")
+def get_drama_gameplay_options(name: str, sm=Depends(get_save_manager)):
+    """获取剧本的玩法配置（缺省时返回默认值）。"""
+    try:
+        opts = drama_service.get_drama_gameplay_options(name)
+        return {"ok": True, "options": opts}
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+
+@router.put("/{name}/gameplay_options")
+def put_drama_gameplay_options(name: str, body: dict, sm=Depends(get_save_manager)):
+    """覆盖保存剧本的玩法配置。"""
+    try:
+        opts = drama_service.save_drama_gameplay_options(name, body)
+        return {"ok": True, "options": opts}
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+
+# ============================================================
 # 一键生成（阶段七：接入 10 步 LLM 管线）
 # ============================================================
 
@@ -191,3 +225,114 @@ def generate_one_step(name: str, body: GenerateStepBody, sm=Depends(get_save_man
 def generate_status(name: str, sm=Depends(get_save_manager)):
     """查询剧本的生成管线状态：哪些步骤已完成、生成耗时、校验结果。"""
     return get_generate_status(name)
+
+
+# ============================================================
+# 补全-生成-评估-打回 管线
+# ============================================================
+
+class ExpandBody(BaseModel):
+    user_input: Dict[str, Any]
+
+
+class GenerateFromOutlineBody(BaseModel):
+    outline: Dict[str, Any]
+
+
+class EvaluateBody(BaseModel):
+    script_data: Dict[str, Any]
+
+
+class RegenerateBody(BaseModel):
+    script_data: Dict[str, Any]
+    evaluation: Dict[str, Any]
+    focus_areas: Optional[List[str]] = None
+
+
+class FullPipelineBody(BaseModel):
+    user_input: Dict[str, Any]
+    max_retries: int = 3
+    skip_expand: bool = False
+    skip_evaluate: bool = False
+
+
+class SaveScriptBody(BaseModel):
+    script_data: Dict[str, Any]
+    drama_name: str
+
+
+@router.post("/_expand")
+def api_expand(body: ExpandBody):
+    """补全用户输入的剧本大纲。"""
+    return expand_outline(body.user_input)
+
+
+@router.post("/_generate_from_outline")
+def api_generate_from_outline(body: GenerateFromOutlineBody):
+    """根据大纲生成完整剧本数据。"""
+    return generate_script(body.outline)
+
+
+@router.post("/_evaluate")
+def api_evaluate(body: EvaluateBody):
+    """评估剧本质量。"""
+    return evaluate_script(body.script_data)
+
+
+@router.post("/_regenerate")
+def api_regenerate(body: RegenerateBody):
+    """根据评估反馈重生成指定部分。"""
+    return regenerate_script(body.script_data, body.evaluation, body.focus_areas)
+
+
+@router.post("/_pipeline")
+def api_pipeline(body: FullPipelineBody):
+    """执行完整的剧本生成 Pipeline（补全→生成→评估→打回）。"""
+    return run_pipeline(
+        body.user_input,
+        max_retries=body.max_retries,
+        skip_expand=body.skip_expand,
+        skip_evaluate=body.skip_evaluate,
+    )
+
+
+@router.post("/_pipeline_async")
+def api_pipeline_async(body: FullPipelineBody):
+    """异步执行完整的剧本生成 Pipeline，返回任务 ID。"""
+    task_id = run_pipeline_async(
+        body.user_input,
+        max_retries=body.max_retries,
+        skip_expand=body.skip_expand,
+        skip_evaluate=body.skip_evaluate,
+    )
+    return {"task_id": task_id, "status": "pending"}
+
+
+@router.get("/_pipeline_tasks")
+def api_list_pipeline_tasks():
+    """列出所有 pipeline 任务。"""
+    return {"tasks": list_pipeline_tasks()}
+
+
+@router.get("/_pipeline_tasks/{task_id}")
+def api_get_pipeline_task(task_id: str):
+    """获取 pipeline 任务状态。"""
+    task = get_pipeline_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
+    return task
+
+
+@router.delete("/_pipeline_tasks/{task_id}")
+def api_delete_pipeline_task(task_id: str):
+    """删除 pipeline 任务。"""
+    ok = delete_pipeline_task(task_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
+    return {"success": True}
+
+
+@router.post("/_save_script")
+def api_save_script(body: SaveScriptBody, sm=Depends(get_save_manager)):
+    """将生成的剧本数据写入 drama 目录。"""
+    return save_script_to_drama_dir(body.script_data, body.drama_name)

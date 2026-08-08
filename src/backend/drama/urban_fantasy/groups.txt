@@ -1,0 +1,12 @@
+﻿{"name": "天机阁", "desc_raw": "都市最古老的异能者组织，成员以占卜、预知类异能为主。声称维持异能与普通人世界的平衡，实则在幕后操控各方势力。现任阁主柳乘风。", "leader_name": "柳乘风", "members": [{"char_name": "苏墨然", "role_raw": "核心成员"}, {"char_name": "秦暮雪", "role_raw": "首席占卜师"}, {"char_name": "韩星野", "role_raw": "占卜师"}, {"char_name": "顾青山", "role_raw": "前成员"}], "importance": 5}
+{"name": "影渊", "desc_raw": "由暗杀者和情报贩子组成的地下组织，只接受委托行事。等级森严，从不背叛雇主。副总指挥姜北，情报组组长姜文轩，执行队长叶知秋。", "leader_name": "姜北", "members": [{"char_name": "叶知秋", "role_raw": "执行队长"}, {"char_name": "宋星辞", "role_raw": "情报员"}, {"char_name": "姜文轩", "role_raw": "情报组组长"}], "importance": 5}
+{"name": "异能管理局", "desc_raw": "官方异能者管理机构，负责登记、监管和调解异能者事务。分行动组和研究组。副局长郑一鸣，行动组队长沈清秋，研究组组长周煜。", "leader_name": "郑一鸣", "members": [{"char_name": "沈清秋", "role_raw": "行动组队长"}, {"char_name": "周煜", "role_raw": "研究组组长"}, {"char_name": "罗飞羽", "role_raw": "行动组副组长"}, {"char_name": "方一鸣", "role_raw": "技术支持"}, {"char_name": "唐婉", "role_raw": "研究员"}], "importance": 5}
+{"name": "血色议会", "desc_raw": "由纯血异能家族组成的利益联盟，掌控城市地下经济。以血脉纯度为尊。现任族长魏行舟，核心成员白少卿、白无咎。", "leader_name": "魏行舟", "members": [{"char_name": "白少卿", "role_raw": "继承人"}, {"char_name": "白无咎", "role_raw": "成员"}, {"char_name": "温诗雨", "role_raw": "私生女"}], "importance": 4}
+{"name": "零号实验室", "desc_raw": "百年前由周鹤年发起的秘密研究设施，从事异能觉醒和强化实验。造成无数悲剧，产出殷无极等变异体。已被官方查封但仍有残余势力活动。", "leader_name": "周鹤年", "members": [{"char_name": "殷无极", "role_raw": "成功实验体"}, {"char_name": "许白", "role_raw": "幸存实验体"}, {"char_name": "楚云裳", "role_raw": "前研究员"}], "importance": 5}
+{"name": "铁衣帮", "desc_raw": "地下黑市帮派，掌控异能道具交易。帮主韩铁衣。与陆沉关系良好，提供情报支持。", "leader_name": "韩铁衣", "members": [], "importance": 3}
+{"name": "暗夜酒吧", "desc_raw": "异能者聚集地，入口在旧书市集中。酒吧内禁止使用异能。老板身份神秘，据说与天机阁有关。", "leader_name": "未知", "members": [], "importance": 3}
+{"name": "监察特组", "desc_raw": "中央检察院下属的异能案件特别调查小组。检察官关如月负责。立场中立，只相信证据。", "leader_name": "关如月", "members": [], "importance": 2}
+{"name": "无声行者", "desc_raw": "都市传说中的神秘情报团体，成员身份不明。为各方提供情报但从不收钱。可能是当年零号计划的反对派。", "leader_name": "沈默", "members": [], "importance": 3}
+{"name": "血脉议会", "desc_raw": "血色议会的下属机构，由年轻一代纯血异能者组成。主张改革，对白少卿的极端路线不满。", "leader_name": "白无咎", "members": [], "importance": 2}
+{"name": "街头情报网", "desc_raw": "由赵小虎运营的街头情报网络，消息灵通，覆盖城市各个角落。与影渊和铁衣帮都有合作。", "leader_name": "赵小虎", "members": [], "importance": 2}
+{"name": "觉醒者互助会", "desc_raw": "由周煜秘密创立的民间组织，为新晋觉醒者提供心理疏导和生存指导。成员多为F-E级低能力觉醒者。", "leader_name": "周煜", "members": [], "importance": 2}

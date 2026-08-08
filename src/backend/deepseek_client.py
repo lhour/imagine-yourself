@@ -5,6 +5,7 @@ DeepSeek 兼容 OpenAI Chat Completions API，因此直接用 openai SDK。
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -45,6 +46,26 @@ def is_mock_mode() -> bool:
     """是否处于 mock 模式（无 API Key 或未安装 openai）。"""
     _get_client()
     return _mock_mode
+
+
+# ---------- Prompt prefix 缓存（适配 DeepSeek 缓存机制） ----------
+# DeepSeek 对「完全相同的前缀 token 序列」会自动复用缓存，
+# 因此我们在客户端记录「上一次 system_prompt 的 hash 与长度」，
+# 若连续两次请求的前缀完全一致，则命中 cache。
+# 这使 pipeline 各 skill 在 A/B 段稳定时享受缓存命中。
+_last_prefix_key: Optional[str] = None
+_last_prefix_len: int = 0
+
+
+def _make_prefix_key(system_prompt: str, user_prompt: str) -> str:
+    """基于 system 前缀（前 512 字符）构造 cache key。
+
+    只取 system 前缀是因为 DeepSeek 的 prefix cache 仅对开头相同的段生效；
+    user_prompt 经常变化，不适合拿来做 key。
+    """
+    head = system_prompt[:512]
+    h = hashlib.md5(head.encode("utf-8")).hexdigest()
+    return f"{len(system_prompt)}:{len(user_prompt)}:{h}"
 
 
 def chat_completion(
@@ -122,10 +143,19 @@ def chat_completion(
         if tool_choice:
             kwargs["tool_choice"] = tool_choice
 
+    # ---- Prompt prefix cache 跟踪 ----
+    global _last_prefix_key
+    prefix_key = _make_prefix_key(system_prompt, user_prompt)
+    prefix_hit = (_last_prefix_key is not None and _last_prefix_key == prefix_key)
+    _last_prefix_key = prefix_key
+
     t0 = time.time()
     all_tool_calls: List[Dict[str, Any]] = []
     all_tool_results: List[Dict[str, Any]] = []
-    total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    total_usage = {
+        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+        "prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 0,
+    }
     last_resp = None
     rounds = 0
     llm_rounds: List[Dict[str, Any]] = []
@@ -145,6 +175,9 @@ def chat_completion(
                 total_usage["prompt_tokens"] += resp.usage.prompt_tokens
                 total_usage["completion_tokens"] += resp.usage.completion_tokens
                 total_usage["total_tokens"] += resp.usage.total_tokens
+                # 缓存命中统计（DeepSeek 扩展字段）
+                total_usage["prompt_cache_hit_tokens"] += getattr(resp.usage, "prompt_cache_hit_tokens", 0) or 0
+                total_usage["prompt_cache_miss_tokens"] += getattr(resp.usage, "prompt_cache_miss_tokens", 0) or 0
 
             round_think = getattr(msg, "reasoning_content", None)
             round_output = msg.content or ""
@@ -236,6 +269,58 @@ def chat_completion(
     final_content = (final_msg.content if final_msg and final_msg.content else "") or ""
     reasoning_content = getattr(final_msg, "reasoning_content", None) if final_msg else None
 
+    # ---- 兜底：若 LLM 仍未产出文本，再发一次无工具的请求强制输出。
+    # 覆盖两种空 content 场景：
+    #   1) 只调工具不回复（all_tool_results 非空）→ 基于工具结果合成
+    #   2) 推理模型把全部 completion token 耗在 reasoning_content 上、
+    #      实际 content 为空（all_tool_results 可能为空）→ 给更多 token
+    #      并提示「直接输出、勿过度推理」让模型产出文本。
+    if not final_content and client is not None:
+        if all_tool_results:
+            synth_user = ("（工具调用阶段已结束）请基于以上工具调用获取的信息，"
+                          "直接输出最终结果。不要再调用任何工具，直接以文本形式回复。")
+        else:
+            synth_user = ("你刚才的回复因推理过长耗尽了输出 token，导致实际内容为空。"
+                          "请基于你已有的思考，直接以文本形式输出最终结果，"
+                          "不要再过度推理，简明扼要地给出答案。")
+        messages.append({"role": "user", "content": synth_user})
+        # 合成调用放宽 max_tokens，给推理模型留出 reasoning + content 的空间。
+        # 推理模型会把大量 token 花在 reasoning_content 上（实测 4096 全耗在推理），
+        # 因此至少给 8192，确保推理完毕后还有余量输出实际内容。
+        synth_max_tokens = max(max_tokens + 4096, 8192)
+        final_kwargs = {
+            "model": kwargs.get("model"),
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": synth_max_tokens,
+            # 不传 tools，强制纯文本回复
+        }
+        with trace.span(f"model_call#final", "model_call",
+                        system_prompt=system_prompt, user_prompt="(synthesis)",
+                        temperature=temperature, max_tokens=synth_max_tokens,
+                        model=final_kwargs["model"]) as ms:
+            synth_resp = client.chat.completions.create(**final_kwargs)
+            last_resp = synth_resp
+            final_msg = synth_resp.choices[0].message
+            final_content = final_msg.content or ""
+            reasoning_content = getattr(final_msg, "reasoning_content", None)
+            if synth_resp.usage:
+                total_usage["prompt_tokens"] += synth_resp.usage.prompt_tokens
+                total_usage["completion_tokens"] += synth_resp.usage.completion_tokens
+                total_usage["total_tokens"] += synth_resp.usage.total_tokens
+            ms.record(think=reasoning_content, output=final_content,
+                      usage=dict(synth_resp.usage) if synth_resp.usage else None,
+                      tool_calls_requested=[])
+            llm_rounds.append({
+                "round": rounds + 1,
+                "prompt": {"system": system_prompt, "user": synth_user},
+                "think": reasoning_content,
+                "output": final_content,
+                "tool_calls_requested": [],
+            })
+            rounds += 1
+        elapsed_ms = int((time.time() - t0) * 1000)
+
     return {
         "content": final_content,
         "reasoning_content": reasoning_content,
@@ -247,6 +332,8 @@ def chat_completion(
         "mock": False,
         "rounds": rounds,
         "llm_rounds": llm_rounds,
+        "prefix_hit": prefix_hit,
+        "prefix_key": prefix_key,
     }
 
 
@@ -319,8 +406,146 @@ def _mock_response(
             "prompt_tokens": len(system_prompt) // 3,
             "completion_tokens": len(content) // 3,
             "total_tokens": (len(system_prompt) + len(content)) // 3,
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": len(system_prompt) // 3,
         },
         "elapsed_ms": 0,
         "mock": True,
         "rounds": 1,
     }
+
+
+# ============================================================
+# Embedding 接口（供 vector_store / knowledge 模块调用）
+# ============================================================
+
+_DEFAULT_EMBEDDING_MODEL = os.environ.get(
+    "DEEPSEEK_EMBEDDING_MODEL", "text-embedding-3-small"
+)
+_DEFAULT_EMBEDDING_DIM = int(os.environ.get("DEEPSEEK_EMBEDDING_DIM", "1536"))
+
+
+def embed(
+    text: str,
+    *,
+    model: Optional[str] = None,
+    dim: Optional[int] = None,
+) -> List[float]:
+    """调用 embedding 接口把文本转为向量。
+
+    - 无 API key / mock 模式下返回伪随机向量（hash-based，便于本地调试）。
+    - 生产环境走 DeepSeek Embeddings API（兼容 openai 格式）。
+    """
+    text = (text or "").strip()
+    target_dim = dim or _DEFAULT_EMBEDDING_DIM
+    if not text:
+        return [0.0] * target_dim
+
+    if is_mock_mode():
+        return _fake_embedding(text, target_dim)
+
+    client = _get_client()
+    if client is None:
+        return _fake_embedding(text, target_dim)
+
+    emb_model = model or _DEFAULT_EMBEDDING_MODEL
+    try:
+        resp = client.embeddings.create(model=emb_model, input=text)
+        if resp and resp.data:
+            vec = resp.data[0].embedding
+            out = [float(v) for v in vec]
+            if len(out) != target_dim:
+                # 维度对齐（截断或补零）
+                if len(out) > target_dim:
+                    out = out[:target_dim]
+                else:
+                    out = out + [0.0] * (target_dim - len(out))
+            return out
+    except Exception:
+        # 失败时降级为伪随机，避免阻断上层
+        pass
+    return _fake_embedding(text, target_dim)
+
+
+def _fake_embedding(text: str, dim: int) -> List[float]:
+    """基于 hash 的伪随机 embedding，保证同文本稳定。"""
+    h = hashlib.md5(text.encode("utf-8")).digest()
+    vec: List[float] = []
+    while len(vec) < dim:
+        h = hashlib.md5(h).digest()
+        vec.extend(((b / 255.0) - 0.5) * 2.0 for b in h)
+    return vec[:dim]
+
+
+def embed_batch(
+    texts: List[str],
+    *,
+    model: Optional[str] = None,
+    dim: Optional[int] = None,
+) -> List[List[float]]:
+    """批量 embedding。mock 模式下对每条单独走 embed() 即可。"""
+    if not texts:
+        return []
+    if is_mock_mode():
+        return [embed(t, model=model, dim=dim) for t in texts]
+
+    client = _get_client()
+    if client is None:
+        return [embed(t, model=model, dim=dim) for t in texts]
+
+    emb_model = model or _DEFAULT_EMBEDDING_MODEL
+    try:
+        resp = client.embeddings.create(model=emb_model, input=texts)
+        if resp and resp.data:
+            # 按 index 排序（SDK 返回可能乱序）
+            data = sorted(resp.data, key=lambda d: d.index)
+            target_dim = dim or _DEFAULT_EMBEDDING_DIM
+            out: List[List[float]] = []
+            for d in data:
+                vec = [float(v) for v in d.embedding]
+                if len(vec) != target_dim:
+                    if len(vec) > target_dim:
+                        vec = vec[:target_dim]
+                    else:
+                        vec = vec + [0.0] * (target_dim - len(vec))
+                out.append(vec)
+            return out
+    except Exception:
+        pass
+    return [embed(t, model=model, dim=dim) for t in texts]
+
+
+# ============ 兼容层：get_llm_client ============
+
+class _LLMClientWrapper:
+    """兼容 drama_generator.py 的 LLM 客户端包装器。"""
+
+    def chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 2048,
+        temperature: float = 0.7,
+        model: Optional[str] = None,
+    ) -> str:
+        """简化版 chat_completion，返回字符串内容。"""
+        system_prompt = ""
+        user_prompt = ""
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_prompt = msg.get("content", "")
+            elif msg.get("role") == "user":
+                user_prompt = msg.get("content", "")
+
+        result = chat_completion(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model=model,
+        )
+        return result.get("content", "")
+
+
+def get_llm_client() -> _LLMClientWrapper:
+    """获取 LLM 客户端（兼容旧版 API）。"""
+    return _LLMClientWrapper()

@@ -27,6 +27,8 @@ export default function BottomBar() {
   const isProcessing = useGameStore((s) => s.isProcessing);
   const runAdvance = useGameStore((s) => s.runAdvance);
   const setError = useGameStore((s) => s.setError);
+  const maxActors = useGameStore((s) => s.maxActors);
+  const setMaxActors = useGameStore((s) => s.setMaxActors);
 
   // 自定义跨度
   const [span, setSpan] = useState<Record<string, number>>({ y: 0, mo: 0, d: 0, h: 0, mi: 0, s: 0 });
@@ -67,6 +69,20 @@ export default function BottomBar() {
               {p.label}
             </button>
           ))}
+        </div>
+        {/* E4: 本 tick 关注角色数滑杆 */}
+        <div className="max-actors-slider" title="本 tick 参与决策的角色数量（max_actors）">
+          <span className="bar-label">角色</span>
+          <input
+            type="range"
+            min={1}
+            max={12}
+            step={1}
+            value={maxActors}
+            onChange={(e) => setMaxActors(Number(e.target.value))}
+            disabled={isProcessing}
+          />
+          <span className="max-actors-value">{maxActors}</span>
         </div>
       </div>
 

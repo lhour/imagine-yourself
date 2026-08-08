@@ -1,0 +1,4 @@
+﻿{"parent_group_name": "血色议会", "child_group_name": "血脉议会"}
+{"parent_group_name": "影渊", "child_group_name": "无声行者"}
+{"parent_group_name": "异能管理局", "child_group_name": "监察特组"}
+{"parent_group_name": "铁衣帮", "child_group_name": "街头情报网"}

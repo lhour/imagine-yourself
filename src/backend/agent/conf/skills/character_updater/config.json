@@ -1,0 +1,6 @@
+{
+  "default_version": "v0",
+  "description": "角色更新节点：基于剧情更新每个角色的记忆/印象/关系（双写关系库+图库）",
+  "tools": ["graph_upsert_views", "memory_retrieve", "character_filter", "graph_views_as"],
+  "params": {}
+}
